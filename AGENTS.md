@@ -42,7 +42,17 @@ Drive a Brother PT-P750W label printer from Linux.
 ## Code
 
 - Python env: `uv` project (`pyproject.toml`, `uv.lock`, `.venv/`). Run
-  scripts with `uv run`. No third-party dependencies yet.
+  scripts with `uv run`. Only dependency: Pillow (text rendering).
+- Spec: Brother "Raster Command Reference" for PT-E550W/P750W/P710BT,
+  `https://download.brother.com/welcome/docp100064/cv_pte550wp750wp710bt_eng_raster_102.pdf`.
+  Not stored in the repo. Extract with `pdftotext -layout`. Use it, not memory.
+- `pt_print.py`: renders text with Pillow (DejaVu Sans Bold) to a 1-bit image,
+  one raster line per column, and sends: invalidate, `ESC @`, `ESC i a 01`,
+  `ESC i z`, `ESC i M 40` (auto cut), `ESC i A 01`, `ESC i K 08` (no chain),
+  `ESC i d 0E 00` (2 mm feed), `M 00` (no compression), `G 10 00` + 16 bytes per
+  line, `1A`. Checks status first and refuses to print on any error. Then waits
+  for the unsolicited "printing completed" reply. `--dry-run PREFIX` writes a
+  PNG preview and the raw job. `--flip` reverses pin order.
 - `pt_status.py`: stdlib-only. Finds `/dev/usb/lpN` for `04f9:2062` through
   sysfs, sends invalidate + `ESC @` + `ESC i S`, decodes the 32-byte status
   reply. Run with `just status`.
@@ -68,9 +78,11 @@ Drive a Brother PT-P750W label printer from Linux.
 | 24 | Tape colour | `0x01` white |
 | 25 | Text colour | `0x08` black |
 
-Error-bit, media-type and colour tables in `pt_status.py` come from memory of
-Brother's raster command reference. Only the values above are confirmed on
-hardware. Treat other codes as unverified.
+All codes in `pt_status.py` are checked against the spec (section 4,
+status tables). Pin map from the spec (section 2.3.5), as
+(left margin, print area) pins on the 128-pin head: 3.5 mm (52, 24),
+6 mm (48, 32), 9 mm (39, 50), 12 mm (29, 70), 18 mm (8, 112), 24 mm (0, 128).
+3.5 mm tape reports width 4. Minimum label length 31 dots (4.4 mm).
 
 ## Docs
 
@@ -84,9 +96,8 @@ As of 2026-11-10 the printer is visible in the VM in printer mode
 verified on hardware: model code `0x68`, 24 mm laminated tape, black on white.
 Known-good raw reply:
 `80 20 42 30 68 30 04 00 00 00 18 01 00 00 00 00 00 00 00 00 00 00 00 00 01 08 00 00 00 00 00 00`.
-No printing code yet.
-
-Next: print a test label on the 24 mm tape. Render text to a bitmap the height
-of the 128-pin head, send it as raster lines with auto cut on. Get the
-printable pin range for 24 mm from `PRTINFO.INI` (Editor Lite drive) or the
-raster command reference. Do not guess it.
+`pt_print.py` is written and a dry run matches the spec's example header.
+It has not printed yet: after the dry run the printer reported
+"replace media" (error info 2, bit 0) with 24 mm tape still detected. Cause
+unknown. Unverified on hardware: pin orientation (whether `--flip` is needed)
+and the completion reply handling.

@@ -64,16 +64,23 @@ just install-udev
 ## Usage
 
 ```sh
-just status   # tape width, media type, colours, errors
+just status                  # tape width, media type, colours, errors
+just print "Hello"           # print a text label on the loaded tape
+just print "Hello" --flip    # if the text comes out mirrored
+just print "Hello" --no-cut
 ```
+
+`print` reads the status first and refuses to print if the printer reports an
+error.
 
 ## Files
 
 | Path | Purpose |
 |---|---|
 | `pt_status.py` | Reads and decodes live printer status over USB |
+| `pt_print.py` | Renders text and prints it as a label |
 | `udev/99-pt-p750w.rules` | Lets the `plugdev` group use the printer |
-| `justfile` | `status` and `install-udev` recipes |
+| `justfile` | `status`, `print` and `install-udev` recipes |
 | `AGENTS.md` | Notes and rules for AI agents |
 
 ## Troubleshooting
@@ -83,8 +90,9 @@ just status   # tape width, media type, colours, errors
 | `No PT-P750W (04f9:2062) found` | Printer off, Editor Lite on, or port not forwarded | Switch it on, turn Editor Lite off, check `lsusb -d 04f9:` |
 | `No access to /dev/usb/lpN` | udev rule missing or not applied | `just install-udev`, or switch the printer off and on |
 | `lsusb` shows `04f9:2065` | Editor Lite mode | Hold the Editor Lite button until the LED goes off |
+| `Printer not ready: replace media` | Cassette not seated, or a latched error | Reseat the tape cassette, close the cover, switch the printer off and on |
 
 ## Status
 
 USB forwarding and live status work (verified on 24 mm laminated tape).
-No printing code yet. Next: print a test label.
+Printing is written but not yet verified on hardware.

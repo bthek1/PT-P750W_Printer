@@ -2,6 +2,10 @@
 status:
     uv run pt_status.py
 
+# Print a text label on the loaded tape, e.g. just print "Hello"
+print text *flags:
+    uv run pt_print.py "{{text}}" {{flags}}
+
 # The usbmisc trigger is needed because the lp node has no idVendor attribute.
 
 # Install the udev rule so plugdev members can use the printer without root
