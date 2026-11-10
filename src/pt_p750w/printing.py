@@ -10,6 +10,7 @@ import re
 import sys
 from dataclasses import dataclass, fields
 from pathlib import Path
+from typing import NamedTuple
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -55,7 +56,18 @@ DOTS_PER_PT = 180 / 72
 
 PI_WIDTH, PI_RECOVER = 0x04, 0x80
 AUTO_CUT = 0x40
+HALF_CUT = 0x04
 NO_CHAIN_PRINTING = 0x08
+MAX_PAGES = 99  # the limit of ESC i A, which counts the labels between full cuts
+MAX_COPIES = MAX_PAGES
+# Cut marks between labels. Vertical text: a line of dashes, 3 to 5 for a
+# half cut, 6 or more for a full cut. The newlines of the dash line go with it;
+# any other blank line is part of a label. Horizontal text: | (half) or ||
+# (full) inline, with the spaces around it.
+DASH_MARK = re.compile(r"\n?^[ \t]*(-{3,})[ \t]*$\n?", re.MULTILINE)
+FULL_CUT_DASHES = 6
+PIPE_MARK = re.compile(r"[ \t]*(\|+)[ \t]*")
+CUT_GAP_DOTS = 2 * FEED_MARGIN_DOTS  # preview only: feed margin after one label and before the next
 
 
 @dataclass(frozen=True)
@@ -133,7 +145,10 @@ def layout(lines: list[str], font: ImageFont.FreeTypeFont, size: int, style: Sty
         y = i * pitch
         left, top, right, bottom = draw.textbbox((0, y), line, font=font, anchor="ls", stroke_width=stroke)
         if not line:
-            left = right = 0
+            # A blank line has no ink; give it the font's full line height so
+            # leading and trailing blank lines add the same length.
+            ascent, descent = font.getmetrics()
+            left, top, right, bottom = 0, y - ascent, 0, y + descent
         if style.underline and line:
             bottom = max(bottom, y + underline_offset(size) + rule_width(size))
         boxes.append((left, top, right, bottom))
@@ -156,14 +171,44 @@ def border_width(pins: int, style: Style) -> int:
     return max(2, pins // 24) if style.border else 0
 
 
-def fit(lines: list[str], pins: int, style: Style, font_path: str | None = None):
+class Label(NamedTuple):
+    text: str
+    full_cut: bool  # after this label; False means a half cut
+
+
+def split_labels(text: str, direction: str = "horizontal") -> list[Label]:
+    """Split text into labels at the cut marks for this direction.
+
+    Blank lines in a label are kept. Blank labels are dropped; the stronger of
+    the cuts around one wins. The last label always gets a full cut.
+    """
+    if direction == "vertical":
+        pattern, full_length = DASH_MARK, FULL_CUT_DASHES
+    else:
+        pattern, full_length = PIPE_MARK, 2
+    parts = pattern.split(text)  # label, mark, label, mark, ..., label
+    labels: list[Label] = []
+    for i in range(0, len(parts), 2):
+        full = i + 1 == len(parts) or len(parts[i + 1]) >= full_length
+        if parts[i].strip():
+            labels.append(Label(parts[i], full))
+        elif labels and full:
+            labels[-1] = labels[-1]._replace(full_cut=True)
+    if labels:
+        labels[-1] = labels[-1]._replace(full_cut=True)
+    return labels
+
+
+def fit(lines: list[str], pins: int, style: Style, font_path: str | None = None, max_size: int | None = None):
     """Largest font size (in dots) up to the style's maximum that fits the print area.
 
     Horizontal text must fit the block height across the tape, vertical text
-    the longest line. Returns (size, font, line boxes).
+    the longest line. max_size caps it further. Returns (size, font, line boxes).
     """
     target = int((pins - 4 * border_width(pins, style)) * 0.85)
     size = pins if style.size_pt is None else min(pins, round(style.size_pt * DOTS_PER_PT))
+    if max_size is not None:
+        size = min(size, max_size)
     while True:
         font = load_font(font_path or style.font_file(), size)
         boxes = layout(lines, font, size, style)
@@ -176,22 +221,64 @@ def fit(lines: list[str], pins: int, style: Style, font_path: str | None = None)
         size -= 1
 
 
+def shared_size(labels: list[Label], pins: int, style: Style, font_path: str | None = None) -> int:
+    """One font size (dots) for every label in a set: the size of the one that needs the smallest."""
+    return min(fit(apply_case(label.text, style.case).split("\n"), pins, style, font_path)[0] for label in labels)
+
+
 def fitted_size_pt(text: str, tape_mm: int, style: Style = Style()) -> float:
-    """The font size, in points, that render() uses for this text on this tape."""
-    size, _, _ = fit(apply_case(text, style.case).split("\n"), PRINT_AREA[tape_mm][1], style)
-    return round(size / DOTS_PER_PT, 1)
+    """The font size, in points, that render_labels() uses for this text on this tape."""
+    labels = split_labels(text, style.direction)
+    return round(shared_size(labels, PRINT_AREA[tape_mm][1], style) / DOTS_PER_PT, 1)
 
 
-def render(text: str, pins: int, style: Style = Style(), font_path: str | None = None) -> Image.Image:
+def render_labels(labels: list[Label], pins: int, style: Style = Style(),
+                  font_path: str | None = None) -> list[Image.Image]:
+    """One image per label. All labels use the same font size, so a numbered set matches."""
+    if not labels:
+        raise ValueError("text is empty")
+    size = shared_size(labels, pins, style, font_path)
+    return [render(label.text, pins, style, font_path, size) for label in labels]
+
+
+def preview_strip(labels: list[Label], images: list[Image.Image]) -> Image.Image:
+    """The labels side by side, as greyscale. A dashed line marks a half cut, a solid line a full cut."""
+    height = images[0].height
+    width = sum(image.width for image in images) + CUT_GAP_DOTS * (len(images) - 1)
+    strip = Image.new("L", (width, height), 255)
+    draw = ImageDraw.Draw(strip)
+    x = 0
+    for i, image in enumerate(images):
+        if i:
+            cut = x + CUT_GAP_DOTS // 2
+            if labels[i - 1].full_cut:
+                draw.line((cut, 0, cut, height - 1), fill=64)
+            else:
+                for y in range(0, height, 8):
+                    draw.line((cut, y, cut, min(y + 3, height - 1)), fill=128)
+            x += CUT_GAP_DOTS
+        strip.paste(image.convert("L"), (x, 0))
+        x += image.width
+    return strip
+
+
+def label_preview(text: str, tape_mm: int, style: Style = Style()) -> Image.Image:
+    labels = split_labels(text, style.direction)
+    return preview_strip(labels, render_labels(labels, PRINT_AREA[tape_mm][1], style))
+
+
+def render(text: str, pins: int, style: Style = Style(), font_path: str | None = None,
+           max_size: int | None = None) -> Image.Image:
     """Render text as a 1-bit image: height = print area pins, width = label length.
 
     Newlines give several lines. Text shrinks until it fits. Vertical text is
-    drawn on a page as wide as the tape, then turned clockwise so it reads top
-    to bottom across the tape.
+    drawn on a page as wide as the tape, then turned counter-clockwise: the
+    first line prints first, so with the label's start held at the top, the
+    lines read top to bottom in the order typed.
     """
     lines = apply_case(text, style.case).split("\n")
     frame = border_width(pins, style)
-    size, font, boxes = fit(lines, pins, style, font_path)
+    size, font, boxes = fit(lines, pins, style, font_path, max_size)
     top = min(b[1] for b in boxes)
     bottom = max(b[3] for b in boxes)
 
@@ -232,7 +319,7 @@ def render(text: str, pins: int, style: Style = Style(), font_path: str | None =
             draw.rectangle((ink_left, y, ink_right, y + rule - 1), fill=ink)
     if frame:
         draw.rectangle((frame, frame, width - 1 - frame, height - 1 - frame), outline=ink, width=frame)
-    return image.transpose(Image.Transpose.ROTATE_270) if vertical else image
+    return image.transpose(Image.Transpose.ROTATE_90) if vertical else image
 
 
 def raster_lines(image: Image.Image, left_pins: int, flip: bool) -> list[bytes]:
@@ -250,19 +337,53 @@ def raster_lines(image: Image.Image, left_pins: int, flip: bool) -> list[bytes]:
     return lines
 
 
-def build_job(lines: list[bytes], tape_mm: int, cut: bool) -> bytes:
+def check_job_options(copies: int, labels: int = 1) -> None:
+    """Validate an untrusted copy count. Raises ValueError."""
+    if type(copies) is not int or not 1 <= copies <= MAX_COPIES:
+        raise ValueError(f"copies must be a whole number from 1 to {MAX_COPIES}")
+    if labels * copies > MAX_PAGES:
+        raise ValueError(f"{labels} labels x {copies} copies is more than {MAX_PAGES} labels per job")
+
+
+def run_lengths(full_cuts: list[bool]) -> list[int]:
+    """For each label, the size of its run: the labels joined by half cuts up to the next full cut."""
+    lengths, run = [], 0
+    for full in full_cuts:
+        run += 1
+        if full:
+            lengths += [run] * run
+            run = 0
+    return lengths
+
+
+def build_job(pages: list[list[bytes]], tape_mm: int, full_cuts: list[bool] | None = None, copies: int = 1) -> bytes:
+    """One page per label (spec 2.1): control codes, raster data, then FF, or 1A after the last page.
+
+    pages holds the raster lines of each label, full_cuts whether a full cut
+    (True) or a half cut follows it; the last label always gets a full cut.
+    The default is a full cut after every label. Copies repeat the whole set.
+    Each page sets "cut each n labels" to the length of its run and turns half
+    cut on inside runs. The spec sends these per page but does not say how the
+    counter behaves when n changes within a job; not yet tested on hardware.
+    """
+    check_job_options(copies, len(pages))
+    cuts = [True] * len(pages) if full_cuts is None else [*full_cuts[:-1], True]
+    sequence = pages * copies
+    runs = run_lengths(cuts * copies)
     job = bytearray(INVALIDATE + INITIALIZE)
-    job += b"\x1bia\x01"  # raster mode
-    job += b"\x1biz" + bytes([PI_WIDTH | PI_RECOVER, 0x00, tape_mm, 0x00])
-    job += len(lines).to_bytes(4, "little") + b"\x00\x00"
-    job += b"\x1biM" + bytes([AUTO_CUT if cut else 0])
-    job += b"\x1biA\x01"  # cut after every label
-    job += b"\x1biK" + bytes([NO_CHAIN_PRINTING])  # feed and cut after the last label
-    job += b"\x1bid" + FEED_MARGIN_DOTS.to_bytes(2, "little")
-    job += b"M\x00"  # no compression
-    for line in lines:
-        job += b"G" + LINE_BYTES.to_bytes(2, "little") + line
-    job += b"\x1a"  # print with feeding (last page)
+    for page, (lines, run) in enumerate(zip(sequence, runs)):
+        job += b"\x1bia\x01"  # raster mode
+        job += b"\x1biz" + bytes([PI_WIDTH | PI_RECOVER, 0x00, tape_mm, 0x00])
+        job += len(lines).to_bytes(4, "little") + bytes([page > 0, 0x00])  # 0 = starting page
+        job += b"\x1biM" + bytes([AUTO_CUT])
+        job += b"\x1biA" + bytes([run])  # full cut every n labels
+        # No chain printing: feed and cut after the last label.
+        job += b"\x1biK" + bytes([NO_CHAIN_PRINTING | (HALF_CUT if run > 1 else 0)])
+        job += b"\x1bid" + FEED_MARGIN_DOTS.to_bytes(2, "little")
+        job += b"M\x00"  # no compression
+        for line in lines:
+            job += b"G" + LINE_BYTES.to_bytes(2, "little") + line
+        job += b"\x1a" if page == len(sequence) - 1 else b"\x0c"  # print with feeding / print
     return bytes(job)
 
 
@@ -275,21 +396,25 @@ def check_ready(status: bytes) -> int:
     return info["tape_mm"]
 
 
-def send(node: str, job: bytes, timeout: float = 15) -> None:
+def send(node: str, job: bytes, pages: int = 1, timeout: float = 15) -> None:
     fd = open_printer(node)
     try:
         drain(fd)
         os.write(fd, job)
-        # The printer sends unsolicited status replies (phase change, then
-        # printing completed or error).
-        for _ in range(6):
+        # The printer sends unsolicited status replies: phase changes, then
+        # printing completed (one per page, spec 1.2 step 5) or error.
+        done = 0
+        for _ in range(6 * pages):
             reply = read_reply(fd, timeout)
             if len(reply) != 32:
                 raise PrinterError(f"No completion reply from printer (got {reply.hex(' ') or 'nothing'})")
             kind = reply[18]
             if kind == 0x01:
-                print("printed")
-                return
+                done += 1
+                print("printed" if pages == 1 else f"printed {done}/{pages}")
+                if done == pages:
+                    return
+                continue
             if kind == 0x02:
                 errors = bits(reply[8], ERRORS_1) + bits(reply[9], ERRORS_2)
                 raise PrinterError(f"Print failed: {', '.join(errors) or 'unknown error'}")
@@ -299,28 +424,35 @@ def send(node: str, job: bytes, timeout: float = 15) -> None:
         os.close(fd)
 
 
-def make_job(text: str, tape_mm: int, cut: bool = True, flip: bool = False,
-             font_path: str | None = None, style: Style = Style()) -> tuple[Image.Image, bytes]:
+def make_job(text: str, tape_mm: int, flip: bool = False, font_path: str | None = None,
+             style: Style = Style(), copies: int = 1) -> tuple[list[Image.Image], bytes]:
+    """Images of the labels in text (split at the cut marks) and the print job for all of them."""
     left_pins, pins = PRINT_AREA[tape_mm]
-    image = render(text, pins, style, font_path)
-    return image, build_job(raster_lines(image, left_pins, flip), tape_mm, cut)
+    labels = split_labels(text, style.direction)
+    images = render_labels(labels, pins, style, font_path)
+    pages = [raster_lines(image, left_pins, flip) for image in images]
+    return images, build_job(pages, tape_mm, [label.full_cut for label in labels], copies)
 
 
-def print_text(text: str, cut: bool = True, style: Style = Style()) -> int:
-    """Check the printer, then print one label. Returns the raster line count."""
+def print_text(text: str, style: Style = Style(), copies: int = 1) -> int:
+    """Check the printer, then print the labels `copies` times. Returns the raster lines of one set."""
+    check_job_options(copies, len(split_labels(text, style.direction)))
     node = find_device()
-    image, job = make_job(text, check_ready(read_status(node)), cut, style=style)
-    send(node, job)
-    return image.width
+    images, job = make_job(text, check_ready(read_status(node)), style=style, copies=copies)
+    send(node, job, len(images) * copies)
+    return sum(image.width for image in images)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("text", nargs="+", help="label text; several words are joined with spaces")
+    parser.add_argument("text", nargs="+", help="label text; several words are joined with spaces. Cut marks "
+                        "between labels: horizontal, | (half cut) or || (full cut); "
+                        "vertical, a line of --- (half cut) or ------ (full cut)")
+    parser.add_argument("--each", action="store_true", help="each argument is a label, joined by half cuts")
     parser.add_argument("--font", help="TTF file; overrides the style's font, bold and italic")
     parser.add_argument("--style", default="{}", help='JSON, e.g. \'{"align": "left", "underline": true}\'')
     parser.add_argument("--tape", type=int, help="tape width in mm; skips the printer query (dry run only)")
-    parser.add_argument("--no-cut", action="store_true")
+    parser.add_argument("--copies", type=int, default=1, help=f"1 to {MAX_COPIES}")
     parser.add_argument("--flip", action="store_true", help="reverse pin order if text prints mirrored")
     parser.add_argument("--dry-run", metavar="PREFIX", help="write PREFIX.png and PREFIX.bin instead of printing")
     args = parser.parse_args()
@@ -329,6 +461,15 @@ def main() -> None:
         style = Style.from_dict(json.loads(args.style))
     except ValueError as e:
         sys.exit(f"Bad --style: {e}")
+    half_cut = "\n---\n" if style.direction == "vertical" else "|"
+    text = half_cut.join(args.text) if args.each else " ".join(args.text)
+    labels = split_labels(text, style.direction)
+    try:
+        if not labels:
+            raise ValueError("text is empty")
+        check_job_options(args.copies, len(labels))
+    except ValueError as e:
+        sys.exit(str(e))
 
     try:
         if args.dry_run and args.tape:
@@ -339,17 +480,19 @@ def main() -> None:
     except PrinterError as e:
         sys.exit(str(e))
 
-    image, job = make_job(" ".join(args.text), tape_mm, not args.no_cut, args.flip, args.font, style)
-    length_mm = image.width / 180 * 25.4
-    print(f"tape {tape_mm} mm, {image.width} raster lines ({length_mm:.1f} mm + margins), job {len(job)} bytes")
+    images, job = make_job(text, tape_mm, args.flip, args.font, style, args.copies)
+    width = sum(image.width for image in images)
+    count = f"{len(images)} labels, " if len(images) > 1 else ""
+    print(f"tape {tape_mm} mm, {count}{width} raster lines ({width / 180 * 25.4:.1f} mm + margins), "
+          f"job {len(job)} bytes")
 
     if args.dry_run:
-        image.save(Path(f"{args.dry_run}.png"))
+        preview_strip(labels, images).save(Path(f"{args.dry_run}.png"))
         Path(f"{args.dry_run}.bin").write_bytes(job)
         print(f"wrote {args.dry_run}.png and {args.dry_run}.bin")
         return
     try:
-        send(node, job)
+        send(node, job, len(images) * args.copies)
     except PrinterError as e:
         sys.exit(str(e))
 

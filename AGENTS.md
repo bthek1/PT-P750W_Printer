@@ -43,13 +43,13 @@ Drive a Brother PT-P750W label printer from Linux.
 
 - Python env: `uv` package, src layout (`src/pt_p750w/`), hatchling build.
   Console scripts `pt-print`, `pt-status` and `pt-server` (see
-  `[project.scripts]`). Runtime dependency: Pillow. Dev dependency: pytest.
+  `[project.scripts]`). Runtime dependency: Pillow. Dev dependencies: pytest, pytest-cov.
 - Library functions raise `PrinterError` (in `status.py`). Only the CLI
   `main()` functions turn it into `sys.exit`, so the server can reuse them.
 - Test recipes (`test`, `web-test`, `coverage`) take `/tmp/agent-tests.lock`
   themselves. Call them directly. Wrapping `just` in another `flock` on the
   same file deadlocks: the outer lock blocks the inner one forever.
-- Tests: `just test`. Hermetic (no printer): 140 tests in about 0.7 s. They
+- Tests: `just test`. Hermetic (no printer): 177 tests in about 0.7 s. They
   check the job against the spec's example bytes and the known-good status
   reply. `tests/conftest.py` has `fake_printer`: a socketpair that plays the
   printer, so the real `read_reply`/`drain`/`send` code runs without USB. Its
@@ -57,8 +57,8 @@ Drive a Brother PT-P750W label printer from Linux.
   data can contain any byte. `find_device` is tested against a fake sysfs
   tree via `status.DEV_GLOB` and `status.USBMISC`.
 - Coverage: `just coverage` runs pytest-cov and Vitest v8 coverage. Both fail
-  under 90%. As of 2026-11-11: Python 100% lines and branches (129 tests),
-  web 100% statements, lines and branches (51 tests). pytest-cov needs
+  under 90%. As of 2026-11-11: Python 100% (177 tests), web 100% statements,
+  lines and branches (72 tests). pytest-cov needs
   `-p pytest_cov` because plugin autoload is off.
   `pyproject.toml` sets `addopts = ["--disable-plugin-autoload"]` (pytest 8.4+):
   the user's ROS 2 `PYTHONPATH` injects `launch_testing` plugins that fail to
@@ -69,11 +69,22 @@ Drive a Brother PT-P750W label printer from Linux.
   `https://download.brother.com/welcome/docp100064/cv_pte550wp750wp710bt_eng_raster_102.pdf`.
   Not stored in the repo. Extract with `pdftotext -layout`. Use it, not memory.
 - `src/pt_p750w/printing.py` (`pt-print`): renders text with Pillow to a 1-bit image,
-  one raster line per column, and sends: invalidate, `ESC @`, `ESC i a 01`,
-  `ESC i z`, `ESC i M 40` (auto cut), `ESC i A 01`, `ESC i K 08` (no chain),
-  `ESC i d 0E 00` (2 mm feed), `M 00` (no compression), `G 10 00` + 16 bytes per
-  line, `1A`. Checks status first and refuses to print on any error. Then waits
-  for the unsolicited "printing completed" reply. `--dry-run PREFIX` writes a
+  one raster line per column, and sends: invalidate, `ESC @`, then one page
+  per label (spec 2.1): `ESC i a 01`, `ESC i z` (n9 = 0 on the first
+  page, 1 after), `ESC i M`, `ESC i A`, `ESC i K`, `ESC i d 0E 00` (2 mm
+  feed), `M 00` (no compression), `G 10 00` + 16 bytes per line, then `0C`
+  between pages and `1A` after the last. There is no cut option: cut marks
+  in the text set the cuts (see Label sets). Labels joined by half cuts up to
+  the next full cut form a run (`run_lengths`). Every page sends `M 40` (auto
+  cut), `A <run length>` (full cut every n labels) and `K 0C` inside a run of
+  2 or more (half cut on, no chain printing) or `K 08` for a single label.
+  The spec sends these per page but does not say how the `ESC i A` counter
+  behaves when n changes within a job. `--copies` 1 to 99, and labels x
+  copies at most 99 per job (the `ESC i A` limit). Checks status first and refuses to print on any error. Then waits
+  for one unsolicited "printing completed" reply per page. Half cut and
+  multi-page jobs are built from the spec but not yet tested on hardware; if
+  the printer sends only one completion per job, `send()` will time out after
+  a successful print. `--dry-run PREFIX` writes a
   PNG preview and the raw job. `--flip` reverses pin order. Not needed: the
   default (image row 0 at pin 0) prints readable text, confirmed by eye.
   Several words are joined with spaces. If the DejaVu font is missing it falls
@@ -102,21 +113,56 @@ Drive a Brother PT-P750W label printer from Linux.
   polling the next test's mock. In VS Code the web tests need the Vitest
   extension (`vitest.explorer`, recommended in `.vscode/extensions.json`). It
   finds `web/vite.config.ts` on its own. Build: `just
-  web-build`.
+  web-build`. Type check: `npx tsc -b`. Lint: `npm run lint` (oxlint); its
+  only warnings are `only-export-components` in generated `components/ui`.
+- `just web-build` (and `just serve`) runs `npm ci` only when
+  `web/node_modules` is missing. `just web-install` runs `npm ci`, which
+  deletes and reinstalls `node_modules`: any web test or build running at
+  the same time fails (exit 127, missing binaries). Before running it, check
+  `pgrep -af "npm ci"` and that no other agent is using `web/`.
 - The UI preview draws the tape to scale at 1 CSS px per printer dot (24 mm
-  tape = 170 px tall, 12 mm = 85 px). `Ruler.tsx` draws a 0 to tape-width mm
-  scale on the left and a label-length scale under the tape. The bitmap
+  tape = 170 px tall, 12 mm = 85 px). In vertical mode it is `UprightPreview`
+  in `App.tsx`: `previewUrl` adds `upright=1`, the server turns the strip
+  clockwise, and the tape stands upright with the start at the top, so it
+  reads in the order typed. The width ruler is then on top and a length ruler
+  (no marker) on the left; the length comes from the image height. `Ruler.tsx` draws a 0 to tape-width mm
+  scale on the left. The length scale under the tape runs the full preview
+  width (numbered every 5 mm) and marks the label end with a coloured bar
+  and its length. It is a long SVG in an `overflow-clip` box, not
+  `overflow-hidden`: a hidden box can be scrolled by `scrollIntoView` or
+  find-in-page, which shifted the ruler off zero. The bitmap
   shows at its natural size, so `image-rendering: pixelated` stays crisp. Do
   not shrink it with a fixed CSS height: nearest-neighbour downscaling drops
   rows and breaks thin strokes.
 - `render()` accepts newlines (several lines). The CLI joins its
   arguments with spaces, so only the API produces multi-line labels.
+- Label sets: cut marks in the text split it into labels (`split_labels`,
+  mirrored by `splitLabels` in `web/src/api.ts`; keep them equal). The marks
+  depend on the style direction, strictly. Horizontal: inline `|` is a half
+  cut, `||` (or more) a full cut, with the spaces around it removed; dashes
+  are then plain text. Vertical: a line of 3 to 5 dashes is a half cut, 6 or
+  more a full cut; pipes are then plain text. The last
+  label always gets a full cut. A blank label is dropped and the stronger
+  cut around it wins. The dash line takes its own newlines; every other blank
+  line, leading or trailing, stays in the label and has full line height
+  (`layout()` gives empty lines the font ascent + descent). The set is one job,
+  one page per label; copies repeat the whole set (a, b, a, b). All labels in
+  a set use the smallest fitted font size (`shared_size`), so a numbered set
+  matches; `/api/fit` reports that shared size. `pt-print --each` makes each
+  argument a label, joined by half cuts (`|`, or a `---` line in vertical). `/api/preview` returns
+  `label_preview()`: the labels side by side with a 28-dot gap, a dashed grey
+  line for a half cut and a solid darker line for a full cut. The gap is a
+  guess (two 2 mm feed margins), not measured. Mixed and half cuts are not yet
+  tested on hardware.
 - Formatting is one `printing.Style` per label (font family, bold, italic,
   underline, strike, outline, invert, border, align, case, max `size_pt`,
   line spacing, direction). `direction: "vertical"` draws the text on a page
-  as wide as the tape, then turns it 90 degrees clockwise: each line runs
-  across the tape (reads top to bottom), fit limits the longest line to the
-  print area, and each extra line adds label length. Defaults reproduce the original look: DejaVu Sans Bold,
+  as wide as the tape, then turns it 90 degrees counter-clockwise: each line
+  runs across the tape and the first line prints first, so held with the
+  start at the top the label reads in the order typed (lines and labels top
+  to bottom). Until 2026-11-11 it turned clockwise, which printed the last
+  line first. Fit limits the longest line to the print area, and each extra
+  line adds label length. Defaults reproduce the original look: DejaVu Sans Bold,
   centred, fit to tape. `Style.from_dict` validates API and `--style` JSON
   and raises `ValueError` (400 in the server). The UI mirrors it as
   `LabelStyle` in `web/src/api.ts` and the toolbar in `FormatToolbar.tsx`;
@@ -156,7 +202,7 @@ Drive a Brother PT-P750W label printer from Linux.
 | 10 | Tape width in mm | `0x18` (24) |
 | 11 | Media type | `0x01` laminated |
 | 18 | Status type | `0x00` reply |
-| 24 | Tape colour | `0x01` white |
+| 24 | Tape colour | `0x01` white (24 mm), `0x90` white (Flex. ID) (12 mm) |
 | 25 | Text colour | `0x08` black |
 
 All codes in `status.py` are checked against the spec (section 4,
@@ -183,8 +229,15 @@ reads correctly, not mirrored, with the default pin order.
 
 2026-11-10: `POST /api/print` with "UI TEST\nline 2" through `pt-server`
 returned after "printing completed" (281 raster lines). Not yet checked by
-eye. The browser UI was built and served, but not clicked through in a
-browser by an agent.
+eye.
+
+2026-11-11: an agent drove the served UI in Chrome (Claude in Chrome) with
+12 mm tape loaded: typed text, the preview, tape-width ruler and length ruler
+with label marker rendered correctly. Printing from the UI was not clicked.
+The 12 mm laminated tape reports tape colour byte `0x90`, "White (Flex. ID)"
+in spec table (8). Tape and text colours use separate tables (8) and (9), so
+`status.py` has `TAPE_COLOURS` and `TEXT_COLOURS`; do not merge them. Raw reply:
+`80 20 42 30 68 30 04 00 00 00 0c 01 00 00 00 00 00 00 00 00 00 00 00 00 90 08 00 00 00 00 00 00`.
 
 The printer queues unsolicited replies (phase change etc.). Both scripts call
 `drain()` before sending, or the first read returns a stale message. An earlier

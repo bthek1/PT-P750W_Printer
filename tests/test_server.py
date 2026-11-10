@@ -21,7 +21,7 @@ def api(tmp_path, monkeypatch):
     printed = []
     monkeypatch.setattr(server, "find_device", lambda: "/dev/usb/lp9")
     monkeypatch.setattr(server, "read_status", lambda node: GOOD_STATUS)
-    monkeypatch.setattr(server, "print_text", lambda text, cut, style: printed.append((text, cut, style)) or 386)
+    monkeypatch.setattr(server, "print_text", lambda *job: printed.append(job) or 386)
     (tmp_path / "index.html").write_text("<h1>ui</h1>")
     httpd = server.make_server("127.0.0.1", 0, tmp_path)
     # A short poll interval keeps shutdown() fast; the default 0.5 s adds up per test.
@@ -67,13 +67,49 @@ def test_status_reports_missing_printer(api, monkeypatch):
 
 def test_print_sends_text(api):
     base, printed = api
-    code, _, body = call(f"{base}/api/print", {"text": "Hello\nWorld", "cut": False})
+    code, _, body = call(f"{base}/api/print", {"text": "Hello\nWorld", "copies": 3})
     assert code == 200
     assert json.loads(body)["raster_lines"] == 386
-    assert printed == [("Hello\nWorld", False, Style())]
+    assert json.loads(body)["labels"] == 3
+    assert printed == [("Hello\nWorld", Style(), 3)]
 
 
-@pytest.mark.parametrize("body", [{"text": ""}, {"text": "   "}, {"text": "x" * 201}, {"text": 5}, ["x"]])
+def test_print_counts_labels_in_a_set(api):
+    base, printed = api
+    code, _, body = call(f"{base}/api/print", {"text": "01a | 02a || 03a", "copies": 2})
+    assert code == 200 and json.loads(body)["labels"] == 6
+    assert len(printed) == 1
+
+
+def test_print_rejects_set_over_page_limit(api):
+    base, printed = api
+    code, _, body = call(f"{base}/api/print", {"text": "|".join("x" * 50), "copies": 2})
+    assert code == 400 and "50 labels x 2 copies" in json.loads(body)["error"]
+    assert printed == []
+
+
+def test_print_counts_vertical_labels_split_by_dash_lines(api):
+    base, printed = api
+    style = {"direction": "vertical"}
+    code, _, body = call(f"{base}/api/print", {"text": "01a\n---\n02a\n------\n03a", "style": style})
+    assert code == 200 and json.loads(body)["labels"] == 3
+
+
+def test_print_defaults_to_one_copy(api):
+    base, printed = api
+    call(f"{base}/api/print", {"text": "Hi"})
+    assert printed == [("Hi", Style(), 1)]
+
+
+@pytest.mark.parametrize("copies", [0, 100, "2"])
+def test_print_rejects_bad_copies(api, copies):
+    base, printed = api
+    code, _, body = call(f"{base}/api/print", {"text": "Hi", "copies": copies})
+    assert code == 400 and "copies must be" in json.loads(body)["error"]
+    assert printed == []
+
+
+@pytest.mark.parametrize("body", [{"text": ""}, {"text": "   "}, {"text": "||"}, {"text": "x" * 1001}, {"text": 5}, ["x"]])
 def test_print_rejects_bad_text(api, body):
     base, printed = api
     assert call(f"{base}/api/print", body)[0] == 400
@@ -83,7 +119,7 @@ def test_print_rejects_bad_text(api, body):
 def test_print_reports_printer_error(api, monkeypatch):
     base, _ = api
 
-    def fail(text, cut, style):
+    def fail(*job):
         raise PrinterError("Printer not ready: cover open")
 
     monkeypatch.setattr(server, "print_text", fail)
@@ -97,6 +133,22 @@ def test_preview_is_png(api):
     code, content_type, body = call(f"{base}/api/preview?text=Hi&tape=12")
     assert code == 200 and content_type == "image/png"
     assert body.startswith(b"\x89PNG")
+
+
+def test_preview_shows_label_set_side_by_side(api):
+    base, _ = api
+    one = Image.open(io.BytesIO(call(f"{base}/api/preview?text=01a&tape=12")[2]))
+    query = urllib.parse.urlencode({"text": "01a | 01a", "tape": 12})
+    two = Image.open(io.BytesIO(call(f"{base}/api/preview?{query}")[2]))
+    assert two.size == (2 * one.width + 28, one.height)
+
+
+def test_preview_upright_puts_the_start_at_the_top(api):
+    base, _ = api
+    query = {"text": "01a\n------\n02a", "tape": 12, "style": '{"direction": "vertical"}'}
+    flat = Image.open(io.BytesIO(call(f"{base}/api/preview?{urllib.parse.urlencode(query)}")[2]))
+    upright = Image.open(io.BytesIO(call(f"{base}/api/preview?{urllib.parse.urlencode({**query, 'upright': 1})}")[2]))
+    assert upright.tobytes() == flat.transpose(Image.Transpose.ROTATE_270).tobytes()  # turned clockwise
 
 
 def test_preview_rejects_unknown_tape(api):
@@ -144,7 +196,7 @@ def call_raw(url, data: bytes):
         return e.code, e.read()
 
 
-@pytest.mark.parametrize("data, message", [(b"", b"body missing"), (b"{nope", b"not JSON"), (b"x" * 5000, b"too large")])
+@pytest.mark.parametrize("data, message", [(b"", b"body missing"), (b"{nope", b"not JSON"), (b"x" * 9000, b"too large")])
 def test_print_rejects_bad_body(api, data, message):
     base, printed = api
     code, body = call_raw(f"{base}/api/print", data)
@@ -206,7 +258,7 @@ def test_print_passes_style(api):
     base, printed = api
     code, _, _ = call(f"{base}/api/print", {"text": "Hi", "style": {"align": "left", "underline": True}})
     assert code == 200
-    assert printed[0][2] == Style(align="left", underline=True)
+    assert printed[0][1] == Style(align="left", underline=True)
 
 
 @pytest.mark.parametrize("style", [{"align": "middle"}, {"bold": "yes"}, {"colour": "red"}, ["bold"]])
@@ -247,7 +299,7 @@ def test_print_reports_busy_printer(monkeypatch):
     printer.lock = HeldLock()
     monkeypatch.setattr(server, "print_text", lambda *args: pytest.fail("printed while busy"))
     with pytest.raises(PrinterError, match="busy with another job"):
-        printer.print("Hi", True, Style())
+        printer.print("Hi", Style(), 1)
 
 
 def test_print_passes_style_to_the_job(monkeypatch):
@@ -256,10 +308,10 @@ def test_print_passes_style_to_the_job(monkeypatch):
     monkeypatch.setattr(server, "print_text", server.print_text)
     monkeypatch.setattr("pt_p750w.printing.find_device", lambda: "/dev/usb/lp9")
     monkeypatch.setattr("pt_p750w.printing.read_status", lambda node: GOOD_STATUS)
-    monkeypatch.setattr("pt_p750w.printing.send", lambda node, job: jobs.append(job))
+    monkeypatch.setattr("pt_p750w.printing.send", lambda node, job, pages: jobs.append(job))
     printer = server.Printer()
-    printer.print("Hi", True, Style())
-    printer.print("Hi", True, Style(invert=True))
+    printer.print("Hi", Style(), 1)
+    printer.print("Hi", Style(invert=True), 1)
     assert len(jobs) == 2 and jobs[0] != jobs[1]
     # Inverted: the first raster line is all black across the 24 mm print area.
     first_line = jobs[1].index(b"G\x10\x00") + 3

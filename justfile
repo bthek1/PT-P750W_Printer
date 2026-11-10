@@ -23,9 +23,13 @@ coverage:
 serve *flags: web-build
     uv run pt-server {{flags}}
 
-# Build the web UI into web/dist
+# Build the web UI into web/dist (installs packages only on a fresh clone)
 web-build:
-    cd web && npm ci --silent && npm run build
+    cd web && { [ -d node_modules ] || npm ci --silent; } && npm run build
+
+# Reinstall web packages from the lockfile (deletes node_modules: not while web tests or builds run)
+web-install:
+    cd web && npm ci
 
 # Vite dev server with hot reload on :5173; run `uv run pt-server` alongside it
 web-dev:

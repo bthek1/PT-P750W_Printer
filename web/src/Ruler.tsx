@@ -21,7 +21,7 @@ function tickLength(mm: number): number {
 function labelled(mm: number, step: number, clearance: number): number[] {
   const marks = [0]
   for (let at = step; at < mm - clearance; at += step) marks.push(at)
-  if (mm > 0) marks.push(mm)
+  marks.push(mm)
   return marks
 }
 

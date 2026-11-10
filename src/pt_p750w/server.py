@@ -3,8 +3,12 @@
 GET  /api/status            live status, re-read from the printer on each call
 GET  /api/preview?text=...  PNG of the label as it would print on the loaded tape.
                             Optional tape=<mm> and style=<JSON, see printing.Style>.
+                            Several labels show side by side: dashed line = half cut, solid = full cut.
+                            upright=1 turns the strip clockwise so its start is at the top (vertical text).
 GET  /api/fit?text=...      font size the renderer picks, as {"size_pt": 51.2}. Same query as preview.
-POST /api/print             {"text": "...", "cut": true, "style": {...}}
+POST /api/print             {"text": "...", "copies": 1, "style": {...}}
+Cut marks in text split it into labels (see printing.split_labels): horizontal
+text uses | (half cut) or || (full cut), vertical text a line of --- or ------.
 Anything else is served from the built web UI directory.
 """
 import argparse
@@ -19,11 +23,21 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from pt_p750w.printing import PRINT_AREA, Style, fitted_size_pt, make_job, print_text
+from PIL import Image
+
+from pt_p750w.printing import (
+    PRINT_AREA,
+    Style,
+    check_job_options,
+    fitted_size_pt,
+    label_preview,
+    print_text,
+    split_labels,
+)
 from pt_p750w.status import PrinterError, decode, find_device, read_status
 
-MAX_TEXT = 200
-MAX_BODY = 4096
+MAX_TEXT = 1000  # room for a set of labels, e.g. 99 short ones
+MAX_BODY = 8192
 DEFAULT_TAPE_MM = 24
 
 
@@ -59,11 +73,11 @@ class Printer:
         status = self.last.get("status") or {}
         return status.get("tape_mm") if status.get("tape_mm") in PRINT_AREA else DEFAULT_TAPE_MM
 
-    def print(self, text: str, cut: bool, style: Style) -> int:
+    def print(self, text: str, style: Style, copies: int) -> int:
         if not self.lock.acquire(timeout=30):
             raise PrinterError("Printer is busy with another job")
         try:
-            return print_text(text, cut, style)
+            return print_text(text, style, copies)
         finally:
             self.lock.release()
 
@@ -97,26 +111,31 @@ class Handler(SimpleHTTPRequestHandler):
             return
         try:
             body = self.read_json()
-            text = clean_text(body.get("text"))
             style = Style.from_dict(body.get("style"))
+            text = clean_text(body.get("text"), style.direction)
+            copies = body.get("copies", 1)
+            labels = len(split_labels(text, style.direction))
+            check_job_options(copies, labels)
         except ValueError as e:
             self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(e)})
             return
         try:
-            lines = self.printer.print(text, bool(body.get("cut", True)), style)
+            lines = self.printer.print(text, style, copies)
         except PrinterError as e:
             self.send_json(HTTPStatus.CONFLICT, {"error": str(e)})
             return
-        self.send_json(HTTPStatus.OK, {"ok": True, "raster_lines": lines, "length_mm": round(lines / 180 * 25.4, 1)})
+        self.send_json(HTTPStatus.OK, {"ok": True, "labels": labels * copies, "raster_lines": lines,
+                                       "length_mm": round(lines / 180 * 25.4, 1)})
 
     def label_query(self, query: dict) -> tuple[str, int, Style] | None:
         """Parse text, tape and style for preview and fit. Sends a 400 and returns None if invalid."""
         try:
-            text = clean_text(query.get("text", [""])[0])
+            style = Style.from_dict(json.loads(query.get("style", ["{}"])[0]))
+            text = clean_text(query.get("text", [""])[0], style.direction)
             tape = int(query.get("tape", [self.printer.tape_mm()])[0])
             if tape not in PRINT_AREA:
                 raise ValueError(f"tape must be one of {sorted(PRINT_AREA)}")
-            return text, tape, Style.from_dict(json.loads(query.get("style", ["{}"])[0]))
+            return text, tape, style
         except ValueError as e:
             self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(e)})
             return None
@@ -128,10 +147,11 @@ class Handler(SimpleHTTPRequestHandler):
     def preview(self, query: dict) -> None:
         if not (parsed := self.label_query(query)):
             return
-        text, tape, style = parsed
-        image, _ = make_job(text, tape, style=style)
+        image = label_preview(*parsed)
+        if query.get("upright") == ["1"]:
+            image = image.transpose(Image.Transpose.ROTATE_270)
         png = io.BytesIO()
-        image.convert("L").save(png, "PNG")
+        image.save(png, "PNG")
         self.send_bytes(HTTPStatus.OK, "image/png", png.getvalue())
 
     def read_json(self) -> dict:
@@ -163,10 +183,9 @@ class Handler(SimpleHTTPRequestHandler):
             super().log_message(format, *args)
 
 
-def clean_text(text: object) -> str:
-    if not isinstance(text, str) or not text.strip():
+def clean_text(text: object, direction: str) -> str:
+    if not isinstance(text, str) or not split_labels(text, direction):
         raise ValueError("text is empty")
-    text = text.strip("\n")
     if len(text) > MAX_TEXT:
         raise ValueError(f"text is longer than {MAX_TEXT} characters")
     return text

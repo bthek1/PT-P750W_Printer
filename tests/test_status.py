@@ -23,6 +23,21 @@ def test_decode_known_good_reply():
     }
 
 
+def test_decode_12mm_flex_id_reply_from_hardware():
+    # Seen on 2026-11-11 with 12 mm tape: tape colour 0x90 is "White (Flex. ID)" in spec table (8).
+    reply = bytes.fromhex("80 20 42 30 68 30 04 00 00 00 0c 01 00 00 00 00 00 00 00 00 00 00 00 00 90 08 00 00 00 00 00 00")
+    info = status.decode(reply)
+    assert (info["tape_mm"], info["tape_colour"], info["text_colour"]) == (12, "white (flex. ID)", "black")
+
+
+def test_tape_and_text_colours_use_separate_tables():
+    # 0x09 is a tape colour only; 0x0A (gold) is a text colour only.
+    assert status.named(status.TAPE_COLOURS, 0x09) == "clear (white text)"
+    assert status.named(status.TEXT_COLOURS, 0x09) == "unknown (0x09)"
+    assert status.named(status.TEXT_COLOURS, 0x0A) == "gold"
+    assert status.named(status.TAPE_COLOURS, 0x0A) == "unknown (0x0a)"
+
+
 def test_decode_lists_errors_from_both_fields():
     info = status.decode(FakePrinter.reply(kind=0x02, errors_1=0x01, errors_2=0x10))
     assert info["errors"] == ["no media", "cover open"]

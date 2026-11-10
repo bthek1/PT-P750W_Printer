@@ -8,7 +8,10 @@ from pt_p750w import printing
 
 from pt_p750w.printing import (
     HEAD_PINS,
+    INITIALIZE,
+    INVALIDATE,
     MIN_LENGTH_DOTS,
+    Label,
     PRINT_AREA,
     Style,
     apply_case,
@@ -16,8 +19,11 @@ from pt_p750w.printing import (
     check_ready,
     fitted_size_pt,
     make_job,
+    preview_strip,
     raster_lines,
     render,
+    render_labels,
+    split_labels,
 )
 from pt_p750w.status import PrinterError
 
@@ -29,21 +35,144 @@ def test_print_area_is_centred_on_head():
 
 def test_print_information_matches_spec_example():
     # Spec section 2.1: 100 mm on 24 mm tape at 180 dpi = 682 raster lines.
-    job = build_job([bytes(16)] * 682, tape_mm=24, cut=True)
+    job = build_job([[bytes(16)] * 682], tape_mm=24)
     assert bytes.fromhex("1b 69 7a 84 00 18 00 aa 02 00 00 00 00") in job
 
 
 def test_job_layout():
-    job = build_job([bytes(16)] * 2, tape_mm=24, cut=True)
+    job = build_job([[bytes(16)] * 2], tape_mm=24)
     assert job.startswith(bytes(100) + b"\x1b@\x1bia\x01")
     for command in (b"\x1biM\x40", b"\x1biA\x01", b"\x1biK\x08", b"\x1bid\x0e\x00", b"M\x00"):
         assert command in job
     assert job.count(b"G\x10\x00") == 2
-    assert job.endswith(b"\x1a")
+    assert job.endswith(b"\x1a") and b"\x0c" not in job
 
 
-def test_no_cut_clears_auto_cut_bit():
-    assert b"\x1biM\x00" in build_job([bytes(16)], tape_mm=24, cut=False)
+def page_commands(job: bytes) -> list[tuple[int, int, int]]:
+    """(ESC i M, ESC i A, ESC i K) parameter of each page."""
+    pages = job[len(INVALIDATE + INITIALIZE):].split(b"\x1bia\x01")[1:]
+    return [tuple(page[page.index(name) + 3] for name in (b"\x1biM", b"\x1biA", b"\x1biK")) for page in pages]
+
+
+def test_cut_marks_set_mode_commands_per_run():
+    # half, full, half, half, (full: the last label): runs of 2 and 3 labels.
+    job = build_job([[bytes(16)]] * 5, tape_mm=24, full_cuts=[False, True, False, False, False])
+    # Auto cut on; full cut every <run> labels; half cut bit on inside a run.
+    assert page_commands(job) == [(0x40, 2, 0x0C)] * 2 + [(0x40, 3, 0x0C)] * 3
+
+
+def test_full_cut_after_every_label_by_default():
+    job = build_job([[bytes(16)]] * 2, tape_mm=24, copies=2)
+    assert page_commands(job) == [(0x40, 1, 0x08)] * 4
+
+
+def test_copies_of_a_half_cut_set_each_end_in_a_full_cut():
+    job = build_job([[bytes(16)]] * 2, tape_mm=24, full_cuts=[False, False], copies=2)
+    assert page_commands(job) == [(0x40, 2, 0x0C)] * 4
+
+
+def test_run_lengths():
+    assert printing.run_lengths([False, True, False, False, True, True]) == [2, 2, 3, 3, 3, 1]
+
+
+def test_copies_repeat_the_page():
+    # Spec 2.1: control codes and raster data per page, FF between pages,
+    # 1A after the last; print information n9 is 0 on the first page only.
+    line = b"\xff" * 16
+    job = build_job([[line] * 2], tape_mm=24, copies=3)
+    assert job.startswith(bytes(100) + b"\x1b@\x1bia\x01")
+    assert job.count(INITIALIZE) == 1
+    assert job.count(b"G\x10\x00" + line) == 6
+    pages = job[len(INVALIDATE + INITIALIZE):].split(b"\x1bia\x01")[1:]
+    assert [page[-1:] for page in pages] == [b"\x0c", b"\x0c", b"\x1a"]
+    assert [page[11] for page in pages] == [0, 1, 1]
+
+
+@pytest.mark.parametrize("copies", [0, 100, 2.0])
+def test_build_job_rejects_bad_copies(copies):
+    with pytest.raises(ValueError, match="copies must be"):
+        build_job([[bytes(16)]], tape_mm=24, copies=copies)
+
+
+def test_label_set_is_one_page_per_label_and_copies_repeat_the_set():
+    a, b = [b"\x01" * 16], [b"\x02" * 16] * 2
+    job = build_job([a, b], tape_mm=24, full_cuts=[False, True], copies=2)
+    pages = job[len(INVALIDATE + INITIALIZE):].split(b"\x1bia\x01")[1:]
+    # Raster line count in ESC i z, then the label's own data: a, b, a, b.
+    assert [page[7] for page in pages] == [1, 2, 1, 2]
+    assert [page.count(b"G\x10\x00\x02") for page in pages] == [0, 2, 0, 2]
+    assert [page[-1:] for page in pages] == [b"\x0c", b"\x0c", b"\x0c", b"\x1a"]
+
+
+def test_label_set_over_page_limit_is_rejected():
+    with pytest.raises(ValueError, match="50 labels x 2 copies"):
+        build_job([[bytes(16)]] * 50, tape_mm=24, copies=2)
+
+
+def texts(labels: list[Label]) -> list[str]:
+    return [label.text for label in labels]
+
+
+def test_split_labels_on_dash_lines():
+    text = "---\n01a\n\n\n---\n02a\nline 2\n  -----  \n\n---\n"
+    assert texts(split_labels(text, "vertical")) == ["01a\n\n", "02a\nline 2"]
+    assert texts(split_labels("01a\n---\n\n01", "vertical")) == ["01a", "\n01"]
+    assert texts(split_labels("a --- b\n--", "vertical")) == ["a --- b\n--"]
+    assert split_labels("---\n \n---", "vertical") == []
+
+
+def test_dash_count_picks_the_cut():
+    text = "01a\n---\n02a\n-----\n03a\n------\n04a\n----------\n05a"
+    assert split_labels(text, "vertical") == [
+        Label("01a", False), Label("02a", False), Label("03a", True), Label("04a", True), Label("05a", True),
+    ]
+
+
+def test_pipes_split_horizontal_text_inline():
+    labels = split_labels("01a | 02a||03a |\t04a\nline 2")
+    assert labels == [Label("01a", False), Label("02a", True), Label("03a", False), Label("04a\nline 2", True)]
+    # Strict per direction: dashes are text in horizontal mode, pipes in vertical.
+    assert texts(split_labels("a\n---\nb")) == ["a\n---\nb"]
+    assert texts(split_labels("a | b", "vertical")) == ["a | b"]
+
+
+def test_blank_label_keeps_the_stronger_cut():
+    assert split_labels("a || | b") == [Label("a", True), Label("b", True)]
+    assert split_labels("a | | b") == [Label("a", False), Label("b", True)]
+
+
+def test_leading_and_trailing_blank_lines_add_the_same_length():
+    style = Style(direction="vertical", size_pt=10)
+    plain, leading, trailing = (render(t, 128, style).width for t in ("01", "\n01", "01\n"))
+    assert leading == trailing > plain
+    # Not the same picture: the blank line is on the other end.
+    assert render("\n01", 128, style).tobytes() != render("01\n", 128, style).tobytes()
+
+
+def test_label_set_shares_one_font_size():
+    style = Style(direction="vertical")
+    wide, narrow = render_labels(split_labels("WWWW\n---\nii", "vertical"), 128, style)
+    alone = render("ii", 128, style)
+    # "ii" alone fits a larger font, so it would be longer than in the set.
+    assert narrow.height == wide.height == 128
+    assert narrow.width < alone.width
+    assert fitted_size_pt("WWWW\n---\nii", 24, style) == fitted_size_pt("WWWW", 24, style)
+
+
+def test_render_labels_rejects_empty_set():
+    with pytest.raises(ValueError, match="empty"):
+        render_labels(split_labels("||"), 128)
+
+
+def test_preview_strip_draws_cut_lines_between_labels():
+    images = [Image.new("1", (40, 70), 1), Image.new("1", (50, 70), 0), Image.new("1", (30, 70), 1)]
+    labels = [Label("a", False), Label("b", True), Label("c", True)]
+    strip = preview_strip(labels, images)
+    assert strip.size == (40 + 28 + 50 + 28 + 30, 70) and strip.mode == "L"
+    half, full = 40 + 14, 40 + 28 + 50 + 14
+    assert [strip.getpixel((half, y)) for y in (0, 5)] == [128, 255]  # dashed
+    assert [strip.getpixel((full, y)) for y in (0, 5)] == [64, 64]  # solid
+    assert strip.getpixel((40, 0)) == 255 and strip.getpixel((40 + 28, 0)) == 0
 
 
 def one_pixel(row: int, height: int) -> Image.Image:
@@ -125,6 +254,14 @@ def test_send_waits_for_printing_completed(fake_printer, capsys):
     assert capsys.readouterr().out.splitlines() == ["printer: phase change", "printer: phase change", "printed"]
 
 
+def test_send_waits_for_every_copy(fake_printer, capsys):
+    _, job = make_job("Hi", 24, copies=2)
+    done = FakePrinter.reply(kind=0x01)
+    fake_printer.script = [(job, [done, FakePrinter.reply(kind=0x06), done])]
+    printing.send("/dev/usb/lp0", job, pages=2)
+    assert capsys.readouterr().out.splitlines() == ["printed 1/2", "printer: phase change", "printed 2/2"]
+
+
 def test_send_raises_on_error_reply(fake_printer):
     _, job = make_job("Hi", 24)
     fake_printer.script = [(job, [FakePrinter.reply(kind=0x02, errors_2=0x10)])]
@@ -152,15 +289,22 @@ def stub_device(monkeypatch):
     sent = []
     monkeypatch.setattr(printing, "find_device", lambda: "/dev/usb/lp0")
     monkeypatch.setattr(printing, "read_status", lambda node: GOOD_STATUS)
-    monkeypatch.setattr(printing, "send", lambda node, job: sent.append(job))
+    monkeypatch.setattr(printing, "send", lambda node, job, pages=1: sent.append((job, pages)))
     return sent
 
 
 def test_print_text_uses_loaded_tape_width(stub_device):
-    lines = printing.print_text("Hello", cut=False)
+    lines = printing.print_text("Hello", copies=2)
     assert lines > MIN_LENGTH_DOTS
-    assert b"\x1biM\x00" in stub_device[0]  # no cut
-    assert b"\x1biz\x84\x00\x18\x00" in stub_device[0]  # 24 mm tape
+    job, pages = stub_device[0]
+    assert pages == 2
+    assert b"\x1biz\x84\x00\x18\x00" in job  # 24 mm tape
+
+
+def test_print_text_rejects_bad_options_before_touching_printer(stub_device, monkeypatch):
+    monkeypatch.setattr(printing, "find_device", lambda: pytest.fail("touched the printer"))
+    with pytest.raises(ValueError, match="copies"):
+        printing.print_text("Hello", copies=0)
 
 
 def test_main_dry_run_writes_preview_without_printer(tmp_path, monkeypatch, capsys):
@@ -173,10 +317,51 @@ def test_main_dry_run_writes_preview_without_printer(tmp_path, monkeypatch, caps
     assert "tape 12 mm" in capsys.readouterr().out
 
 
-def test_main_prints_on_printer(stub_device, monkeypatch):
-    monkeypatch.setattr(sys, "argv", ["pt-print", "Hi", "--no-cut"])
+def test_main_dry_run_previews_a_label_set(tmp_path, monkeypatch, capsys):
+    prefix = tmp_path / "set"
+    style = '{"direction": "vertical"}'
+    monkeypatch.setattr(sys, "argv", ["pt-print", "01a\n---\n02a\n------\n03a", "--tape", "24", "--style", style,
+                                      "--dry-run", str(prefix)])
     printing.main()
-    assert len(stub_device) == 1 and b"\x1biM\x00" in stub_device[0]
+    strip = Image.open(f"{prefix}.png")
+    assert {64, 128} <= {value for _, value in strip.getcolors()}  # one full and one half cut line
+    assert "3 labels" in capsys.readouterr().out
+
+
+def test_main_prints_on_printer(stub_device, monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["pt-print", "Hi | Ho", "--copies", "2"])
+    printing.main()
+    assert len(stub_device) == 1
+    job, pages = stub_device[0]
+    assert pages == 4 and page_commands(job) == [(0x40, 2, 0x0C)] * 4
+
+
+def test_main_each_argument_is_a_label(stub_device, monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["pt-print", "01a", "02a", "03a", "--each", "--copies", "2"])
+    printing.main()
+    job, pages = stub_device[0]
+    assert pages == 6 and page_commands(job) == [(0x40, 3, 0x0C)] * 6
+
+
+def test_main_each_joins_vertical_labels_with_dash_lines(stub_device, monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["pt-print", "01a", "02a", "--each", "--style", '{"direction": "vertical"}'])
+    printing.main()
+    job, pages = stub_device[0]
+    assert pages == 2 and page_commands(job) == [(0x40, 2, 0x0C)] * 2
+
+
+def test_main_rejects_empty_label_set(stub_device, monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["pt-print", "||"])
+    with pytest.raises(SystemExit, match="empty"):
+        printing.main()
+    assert stub_device == []
+
+
+def test_main_rejects_bad_copies(stub_device, monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["pt-print", "Hi", "--copies", "0"])
+    with pytest.raises(SystemExit, match="copies must be"):
+        printing.main()
+    assert stub_device == []
 
 
 def test_main_refuses_when_printer_reports_error(stub_device, monkeypatch):
@@ -188,7 +373,7 @@ def test_main_refuses_when_printer_reports_error(stub_device, monkeypatch):
 
 
 def test_main_exits_with_message_when_print_fails(stub_device, monkeypatch):
-    def jam(node, job):
+    def jam(node, job, pages):
         raise PrinterError("Print failed: cutter jam")
 
     monkeypatch.setattr(printing, "send", jam)
@@ -333,10 +518,19 @@ def test_vertical_lines_add_label_length():
     assert render("A\nB\nC", 128, style).width > render("A", 128, style).width
 
 
-def test_vertical_text_reads_top_to_bottom():
-    # Turned clockwise: the line's first letter is at the top of the tape.
+def test_vertical_text_turns_counter_clockwise():
+    # The line's first letter is at the far edge of the tape (high pins)...
     image = render("L      .", 128, Style(direction="vertical", align="left"))
     top, bottom = ink_rows(image)[0], ink_rows(image)[-1]
     def ink_in(rows):
         return sum(image.getpixel((x, y)) == 0 for x in range(image.width) for y in rows)
-    assert ink_in(range(top, top + 20)) > ink_in(range(bottom - 20, bottom + 1))
+    assert ink_in(range(bottom - 20, bottom + 1)) > ink_in(range(top, top + 20))
+
+
+def test_vertical_first_line_prints_first():
+    # ...and the first line is in the first raster lines, so lines print in the order typed.
+    image = render("WWW\n.", 128, Style(direction="vertical"))
+    def ink_in(columns):
+        return sum(image.getpixel((x, y)) == 0 for x in columns for y in range(image.height))
+    half = image.width // 2
+    assert ink_in(range(half)) > ink_in(range(half, image.width))

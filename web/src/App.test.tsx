@@ -25,7 +25,7 @@ function json(body: unknown, status = 200) {
   return Promise.resolve(new Response(JSON.stringify(body), { status }))
 }
 
-function mockServer(status: StatusResponse | 'down', print = json({ ok: true, raster_lines: 386, length_mm: 54.5 })) {
+function mockServer(status: StatusResponse | 'down', print = json({ ok: true, labels: 1, raster_lines: 386, length_mm: 54.5 })) {
   const fetchMock = vi.fn((url: string) => {
     if (url === '/api/status') return status === 'down' ? Promise.reject(new TypeError('fetch failed')) : json(status)
     if (url === '/api/print') return print
@@ -78,7 +78,7 @@ describe('App', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Print' }))
     expect(await screen.findByText(/Printed/)).toBeInTheDocument()
     const call = fetchMock.mock.calls.find(([url]) => url === '/api/print') as unknown as [string, RequestInit]
-    expect(JSON.parse(call[1].body as string)).toEqual({ text: 'Hello\nWorld', cut: true, style: DEFAULT_STYLE })
+    expect(JSON.parse(call[1].body as string)).toEqual({ text: 'Hello\nWorld', copies: 1, style: DEFAULT_STYLE })
   })
 
   it('shows the server error when printing fails', async () => {
@@ -118,16 +118,73 @@ describe('App', () => {
     expect(fetchMock.mock.calls.filter(([url]) => url === '/api/print')).toHaveLength(1)
   })
 
-  it('sends cut: false when the checkbox is cleared', async () => {
-    const fetchMock = mockServer(READY)
+  it('sends the copies and has no cut mode option', async () => {
+    const fetchMock = mockServer(READY, json({ ok: true, labels: 5, raster_lines: 386, length_mm: 54.5 }))
     render(<App />)
     await screen.findByText('Ready')
     fireEvent.change(screen.getByLabelText(/Label text/), { target: { value: 'Hi' } })
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Cut after printing' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Print' }))
-    await screen.findByText(/Printed/)
+    expect(screen.queryByRole('radio', { name: 'Half cut' })).toBeNull()
+    fireEvent.change(screen.getByLabelText('Copies'), { target: { value: '5' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Print 5 labels' }))
+    await screen.findByText(/Printed 5 labels/)
     const call = fetchMock.mock.calls.find(([url]) => url === '/api/print') as unknown as [string, RequestInit]
-    expect(JSON.parse(call[1].body as string)).toEqual({ text: 'Hi', cut: false, style: DEFAULT_STYLE })
+    expect(JSON.parse(call[1].body as string)).toEqual({ text: 'Hi', copies: 5, style: DEFAULT_STYLE })
+  })
+
+  it('prints a label set separated by pipes as one job', async () => {
+    const fetchMock = mockServer(READY, json({ ok: true, labels: 8, raster_lines: 400, length_mm: 56.4 }))
+    render(<App />)
+    await screen.findByText('Ready')
+    const text = '01a | 02a | 03a | 04a'
+    fireEvent.change(screen.getByLabelText(/Label text/), { target: { value: text } })
+    fireEvent.change(screen.getByLabelText('Copies'), { target: { value: '2' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Print 8 labels' }))
+    await screen.findByText('Printed 8 labels.')
+    const call = fetchMock.mock.calls.find(([url]) => url === '/api/print') as unknown as [string, RequestInit]
+    expect(JSON.parse(call[1].body as string)).toMatchObject({ text, copies: 2 })
+  })
+
+  it('explains the label set in the preview', async () => {
+    mockServer(READY)
+    render(<App />)
+    fireEvent.change(screen.getByLabelText(/Label text/), { target: { value: '01a | 02a || 03a' } })
+    const image = await screen.findByAltText('Label preview')
+    Object.defineProperty(image, 'naturalWidth', { value: 300 })
+    fireEvent.load(image)
+    expect(await screen.findByText(/3 labels on 2 strips, in one font size/)).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText(/Label text/), { target: { value: '01a | 02a' } })
+    expect(await screen.findByText(/2 labels on 1 strip,/)).toBeInTheDocument()
+  })
+
+  it('splits vertical labels at dash lines and explains the marks for the direction', async () => {
+    mockServer(READY)
+    render(<App />)
+    await screen.findByText('Ready')
+    expect(screen.getByText('01a | 02a || 03a', { selector: 'code' })).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText(/Label text/), { target: { value: '01a\n---\n02a\n------\n03a' } })
+    expect(screen.getByRole('button', { name: 'Print' })).toBeEnabled()
+    fireEvent.click(screen.getByRole('radio', { name: 'Vertical' }))
+    expect(screen.getByText('------')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Print 3 labels' })).toBeEnabled()
+  })
+
+  it('refuses a job over the label limit', async () => {
+    mockServer(READY)
+    render(<App />)
+    await screen.findByText('Ready')
+    fireEvent.change(screen.getByLabelText(/Label text/), { target: { value: 'a | b' } })
+    fireEvent.change(screen.getByLabelText('Copies'), { target: { value: '50' } })
+    expect(screen.getByRole('alert')).toHaveTextContent('2 labels x 50 copies is more than 99')
+    expect(screen.getByRole('button', { name: 'Print 100 labels' })).toBeDisabled()
+  })
+
+  it.each([['0', 1], ['500', 99], ['2.6', 3], ['', 1]])('clamps copies %s to %i', async (typed, expected) => {
+    mockServer(READY)
+    render(<App />)
+    const input = screen.getByLabelText('Copies')
+    fireEvent.change(input, { target: { value: '7' } })
+    fireEvent.change(input, { target: { value: typed } })
+    expect(input).toHaveValue(expected)
   })
 
   it('disables Print for blank text', async () => {
@@ -247,6 +304,27 @@ describe('App', () => {
     const length = screen.getByRole('img', { name: 'Length ruler, label 100.0 mm' })
     expect(Number(length.getAttribute('width'))).toBeGreaterThan(709)
     expect(screen.getByTestId('ruler-marker')).toHaveTextContent('100 mm')
+  })
+
+  it('shows vertical labels upright, start at the top, to scale', async () => {
+    mockServer({ ...READY, status: { ...READY.status!, tape_mm: 12 } })
+    render(<App />)
+    await screen.findByText('Ready')
+    fireEvent.click(screen.getByRole('radio', { name: 'Vertical' }))
+    expect(screen.getByText(/Start of the strip at the top/)).toBeInTheDocument()
+    expect(screen.getByText('Preview appears here')).toBeInTheDocument()
+    // The tape stands upright: 12 mm tape is 85 px wide.
+    expect(screen.getByTestId('tape')).toHaveStyle({ width: '85px' })
+    expect(screen.getByRole('img', { name: 'Tape width ruler, 0 to 12 mm' })).toHaveAttribute('width', '85')
+    fireEvent.change(screen.getByLabelText(/Label text/), { target: { value: '01a\n------\n02a' } })
+    const preview = await screen.findByAltText('Label preview')
+    expect(new URL(preview.getAttribute('src')!, 'http://x').searchParams.get('upright')).toBe('1')
+    // The label length runs down the page, so it comes from the image height.
+    Object.defineProperty(preview, 'naturalHeight', { value: 709 })
+    fireEvent.load(preview)
+    const length = screen.getByRole('img', { name: 'Length ruler, label 100.0 mm' })
+    expect(length).toHaveAttribute('height', '709')
+    expect(await screen.findByText(/2 labels on 2 strips/)).toBeInTheDocument()
   })
 
   it('shows the fitted size on the auto size option', async () => {

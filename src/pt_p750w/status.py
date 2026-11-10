@@ -36,9 +36,20 @@ STATUS_TYPES = {
     0x05: "notification",
     0x06: "phase change",
 }
-COLOURS = {
+# Spec section 4, tables (8) tape colour and (9) text colour. The two code sets differ.
+TAPE_COLOURS = {
     0x01: "white", 0x02: "other", 0x03: "clear", 0x04: "red", 0x05: "blue",
-    0x06: "yellow", 0x07: "green", 0x08: "black", 0x0A: "gold",
+    0x06: "yellow", 0x07: "green", 0x08: "black", 0x09: "clear (white text)",
+    0x20: "matte white", 0x21: "matte clear", 0x22: "matte silver", 0x23: "satin gold",
+    0x24: "satin silver", 0x30: "blue (D)", 0x31: "red (D)", 0x40: "fluorescent orange",
+    0x41: "fluorescent yellow", 0x50: "berry pink (S)", 0x51: "light gray (S)",
+    0x52: "lime green (S)", 0x60: "yellow (F)", 0x61: "pink (F)", 0x62: "blue (F)",
+    0x70: "white (heat-shrink tube)", 0x90: "white (flex. ID)", 0x91: "yellow (flex. ID)",
+    0xF0: "cleaning", 0xF1: "stencil", 0xFF: "incompatible",
+}
+TEXT_COLOURS = {
+    0x01: "white", 0x02: "other", 0x04: "red", 0x05: "blue", 0x08: "black",
+    0x0A: "gold", 0x62: "blue (F)", 0xF0: "cleaning", 0xF1: "stencil", 0xFF: "incompatible",
 }
 
 
@@ -123,8 +134,8 @@ def decode(status: bytes) -> dict:
         "errors": bits(status[8], ERRORS_1) + bits(status[9], ERRORS_2),
         "tape_mm": status[10],
         "media": named(MEDIA_TYPES, status[11]),
-        "tape_colour": named(COLOURS, status[24]),
-        "text_colour": named(COLOURS, status[25]),
+        "tape_colour": named(TAPE_COLOURS, status[24]),
+        "text_colour": named(TEXT_COLOURS, status[25]),
         "raw": status.hex(" "),
     }
 
