@@ -11,6 +11,10 @@ Drive a Brother PT-P750W label printer from Linux.
 - PT-P750W USB IDs: vendor `04f9`. Product `2062` in normal (raster) mode.
   Product `2065` when the "Editor Lite" LED is on; it then shows up as USB mass
   storage, not as a printer. Hold the Editor Lite button until the LED is off.
+- In Editor Lite mode the drive holds the Windows/macOS Editor Lite app.
+  `Ptlite10/PRTINFO.INI` lists the model capabilities (180 dpi, 128-pin head,
+  tape sizes, auto/half cut). `PRTSTATE.STS` is a 512-byte placeholder
+  ("1234567890..."), not live status. No device settings are exposed there.
 - Network: raw printing on TCP 9100, SNMP status on UDP 161.
   Wi-Fi Direct mode puts the printer on its own access point (`DIRECT-*_PT-P750W`).
 - The printer is plugged into the Proxmox host. The dev machine is a VM on that
@@ -35,6 +39,16 @@ Drive a Brother PT-P750W label printer from Linux.
 2. LAN: `nmap -n -Pn -p 9100 --open <subnet>`, then check each hit with
    `ipptool` or SNMP. Only the PT-P750W model counts.
 
+## Code
+
+- `pt_status.py`: stdlib-only. Finds `/dev/usb/lpN` for `04f9:2062` through
+  sysfs, sends invalidate + `ESC @` + `ESC i S`, decodes the 32-byte status
+  reply. Run with `just status`.
+- `udev/99-pt-p750w.rules`: gives group `plugdev` access to the printer (USB and
+  usblp nodes). The user is in `plugdev`, not `lp`. Install with
+  `just install-udev` (needs the user's sudo password; agents cannot run it).
+- CUPS is active on the dev VM and may briefly re-bind usblp on hotplug.
+
 ## Docs
 
 README.md holds the human setup steps. Keep it in sync with this file.
@@ -42,6 +56,6 @@ Do not put IPs, VM IDs, serial numbers or home paths in tracked files.
 
 ## Status
 
-No code yet. As of 2026-11-10 the printer is visible in the VM over USB, in
-Editor Lite mode (`04f9:2065`, block device of 4 MiB). Switch Editor Lite off
-before raster printing.
+As of 2026-11-10 the printer is visible in the VM in printer mode
+(`04f9:2062`, `/dev/usb/lpN`). Status reading is written but not yet verified
+on hardware: it is waiting on the udev rule install. No printing code yet.

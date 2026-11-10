@@ -42,6 +42,22 @@ mode, and an ID-based forward loses the printer when it does.
 
 Hold the Editor Lite button until the LED goes off before printing.
 
+## Permissions
+
+The printer device belongs to group `lp` by default. Install the udev rule once
+so members of `plugdev` can use it without root:
+
+```sh
+just install-udev
+```
+
+## Usage
+
+```sh
+just status   # tape width, media type, colours, errors
+```
+
 ## Status
 
-USB forwarding works. No printing code yet.
+USB forwarding works. Live status works once the udev rule is installed. No
+printing code yet.

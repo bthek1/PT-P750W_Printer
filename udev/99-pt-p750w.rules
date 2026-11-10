@@ -1,0 +1,3 @@
+# Brother PT-P750W in printer mode: let plugdev members talk to it without root.
+SUBSYSTEM=="usb", ATTR{idVendor}=="04f9", ATTR{idProduct}=="2062", GROUP="plugdev", MODE="0660"
+KERNEL=="lp*", SUBSYSTEMS=="usb", ATTRS{idVendor}=="04f9", ATTRS{idProduct}=="2062", GROUP="plugdev", MODE="0660"
