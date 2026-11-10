@@ -38,6 +38,11 @@ describe('api', () => {
     await expect(printLabel('Hi', true)).rejects.toThrow('Printer not ready: cover open')
   })
 
+  it('falls back to the HTTP status when the error JSON has no message', async () => {
+    respond(JSON.stringify({ detail: 'nope' }), 500)
+    await expect(printLabel('Hi', true)).rejects.toThrow('HTTP 500')
+  })
+
   it('falls back to the HTTP status when the error body is not JSON', async () => {
     respond('<html>Bad Gateway</html>', 502)
     await expect(printLabel('Hi', true)).rejects.toThrow('HTTP 502')

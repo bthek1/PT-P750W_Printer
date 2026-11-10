@@ -106,8 +106,10 @@ def test_preview_rejects_unknown_tape(api):
 
 def test_serves_web_ui(api):
     base, _ = api
-    code, _, body = call(f"{base}/")
-    assert code == 200 and b"<h1>ui</h1>" in body
+    with urllib.request.urlopen(f"{base}/", timeout=5) as response:
+        assert response.status == 200 and b"<h1>ui</h1>" in response.read()
+        # A rebuilt UI must replace the cached one on a normal reload.
+        assert response.headers["Cache-Control"] == "no-cache"
 
 
 def test_status_during_print_uses_cache(monkeypatch):
@@ -213,3 +215,60 @@ def test_preview_rejects_bad_style(api, style):
     base, _ = api
     query = urllib.parse.urlencode({"text": "Hi", "style": style})
     assert call(f"{base}/api/preview?{query}")[0] == 400
+
+
+def test_api_responses_are_not_cached(api):
+    base, _ = api
+    with urllib.request.urlopen(f"{base}/api/status", timeout=5) as response:
+        assert response.headers.get_all("Cache-Control") == ["no-store"]
+
+
+def test_print_reports_busy_printer(monkeypatch):
+    class HeldLock:
+        def acquire(self, timeout):
+            return False
+
+    printer = server.Printer()
+    printer.lock = HeldLock()
+    monkeypatch.setattr(server, "print_text", lambda *args: pytest.fail("printed while busy"))
+    with pytest.raises(PrinterError, match="busy with another job"):
+        printer.print("Hi", True, Style())
+
+
+def test_print_passes_style_to_the_job(monkeypatch):
+    # Unlike the api fixture, this runs the real print_text and make_job.
+    jobs = []
+    monkeypatch.setattr(server, "print_text", server.print_text)
+    monkeypatch.setattr("pt_p750w.printing.find_device", lambda: "/dev/usb/lp9")
+    monkeypatch.setattr("pt_p750w.printing.read_status", lambda node: GOOD_STATUS)
+    monkeypatch.setattr("pt_p750w.printing.send", lambda node, job: jobs.append(job))
+    printer = server.Printer()
+    printer.print("Hi", True, Style())
+    printer.print("Hi", True, Style(invert=True))
+    assert len(jobs) == 2 and jobs[0] != jobs[1]
+    # Inverted: the first raster line is all black across the 24 mm print area.
+    first_line = jobs[1].index(b"G\x10\x00") + 3
+    assert jobs[1][first_line:first_line + 16] == b"\xff" * 16
+
+
+def test_main_serves_built_ui_without_warning(monkeypatch, tmp_path, capsys):
+    class Interrupted:
+        def serve_forever(self):
+            raise KeyboardInterrupt
+
+    (tmp_path / "index.html").write_text("<h1>ui</h1>")
+    monkeypatch.setattr(server, "make_server", lambda *args: Interrupted())
+    monkeypatch.setattr(sys, "argv", ["pt-server", "--web", str(tmp_path)])
+    server.main()
+    assert "warning" not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("tape", sorted(PRINT_AREA))
+def test_preview_with_every_effect_fits_each_tape(api, tape):
+    base, _ = api
+    style = {"underline": True, "strike": True, "outline": True, "invert": True, "border": True,
+             "align": "right", "case": "title", "line_spacing": 2.0, "font": "condensed", "italic": True}
+    query = urllib.parse.urlencode({"text": "Shelf 2\nkitchen", "tape": tape, "style": json.dumps(style)})
+    code, _, body = call(f"{base}/api/preview?{query}")
+    assert code == 200
+    assert Image.open(io.BytesIO(body)).height == PRINT_AREA[tape][1]

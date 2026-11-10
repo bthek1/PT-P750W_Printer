@@ -46,7 +46,7 @@ Drive a Brother PT-P750W label printer from Linux.
   `[project.scripts]`). Runtime dependency: Pillow. Dev dependency: pytest.
 - Library functions raise `PrinterError` (in `status.py`). Only the CLI
   `main()` functions turn it into `sys.exit`, so the server can reuse them.
-- Tests: `just test`. Hermetic (no printer): 116 tests in about 0.5 s. They
+- Tests: `just test`. Hermetic (no printer): 129 tests in about 0.6 s. They
   check the job against the spec's example bytes and the known-good status
   reply. `tests/conftest.py` has `fake_printer`: a socketpair that plays the
   printer, so the real `read_reply`/`drain`/`send` code runs without USB. Its
@@ -54,8 +54,9 @@ Drive a Brother PT-P750W label printer from Linux.
   data can contain any byte. `find_device` is tested against a fake sysfs
   tree via `status.DEV_GLOB` and `status.USBMISC`.
 - Coverage: `just coverage` runs pytest-cov and Vitest v8 coverage. Both fail
-  under 90%. As of 2026-11-10: Python 99% lines, web 99% statements and 92%
-  branches. pytest-cov needs `-p pytest_cov` because plugin autoload is off.
+  under 90%. As of 2026-11-11: Python 100% lines and branches (129 tests),
+  web 100% statements, lines and branches (51 tests). pytest-cov needs
+  `-p pytest_cov` because plugin autoload is off.
   `pyproject.toml` sets `addopts = ["--disable-plugin-autoload"]` (pytest 8.4+):
   the user's ROS 2 `PYTHONPATH` injects `launch_testing` plugins that fail to
   import. Keep it there, not in an env var, so VS Code test discovery works too.

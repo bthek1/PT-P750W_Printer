@@ -224,4 +224,45 @@ describe('App', () => {
     expect(screen.getByRole('radio', { name: 'Centre' })).toHaveAttribute('aria-checked', 'true')
     expect(clear).toBeDisabled()
   })
+
+  it('shows the label length once the preview loads', async () => {
+    mockServer(READY)
+    render(<App />)
+    await screen.findByText('Ready')
+    fireEvent.change(screen.getByLabelText(/Label text/), { target: { value: 'Hi' } })
+    const preview = await screen.findByAltText('Label preview')
+    // 709 raster lines at 180 dpi is 100 mm.
+    Object.defineProperty(preview, 'naturalWidth', { value: 709 })
+    fireEvent.load(preview)
+    expect(await screen.findByText('About 100 mm of text on 24 mm tape, plus feed margins.')).toBeInTheDocument()
+  })
+
+  it('updates the preview when only the style changes', async () => {
+    mockServer(READY)
+    render(<App />)
+    await screen.findByText('Ready')
+    fireEvent.change(screen.getByLabelText(/Label text/), { target: { value: 'Hi' } })
+    const before = (await screen.findByAltText('Label preview')).getAttribute('src')
+    fireEvent.click(screen.getByRole('button', { name: 'Border' }))
+    await waitFor(() => expect(screen.getByAltText('Label preview').getAttribute('src')).not.toBe(before))
+  })
+
+  it('shows a missing printer without an error detail', async () => {
+    mockServer({ ...READY, connected: false, status: null, error: null })
+    render(<App />)
+    expect(await screen.findByText('Printer not found')).toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
+  it('shows a print failure that is not an Error object', async () => {
+    const reset = Promise.reject('connection reset')
+    // Created before the app awaits it; mark it handled so Vitest does not flag it.
+    reset.catch(() => {})
+    mockServer(READY, reset)
+    render(<App />)
+    await screen.findByText('Ready')
+    fireEvent.change(screen.getByLabelText(/Label text/), { target: { value: 'Hi' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Print' }))
+    expect(await screen.findByText('connection reset')).toBeInTheDocument()
+  })
 })

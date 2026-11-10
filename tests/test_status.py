@@ -118,3 +118,25 @@ def test_main_exits_with_message_when_printer_missing(monkeypatch):
     monkeypatch.setattr(status, "find_device", missing)
     with pytest.raises(SystemExit, match="No PT-P750W"):
         status.main()
+
+
+def test_read_reply_stops_when_nothing_arrives(monkeypatch):
+    monkeypatch.setattr(status.select, "select", lambda r, w, x, t: ([], [], []))
+    monkeypatch.setattr(status.os, "read", lambda fd, n: pytest.fail("read without data"))
+    assert status.read_reply(0, timeout=5) == b""
+
+
+def test_read_reply_retries_after_empty_read(monkeypatch):
+    # usblp can report readable with nothing queued.
+    chunks = [b"", GOOD_STATUS]
+    sleeps = []
+    monkeypatch.setattr(status.select, "select", lambda r, w, x, t: (r, [], []))
+    monkeypatch.setattr(status.os, "read", lambda fd, n: chunks.pop(0))
+    monkeypatch.setattr(status.time, "sleep", sleeps.append)
+    assert status.read_reply(0, timeout=5) == GOOD_STATUS
+    assert sleeps == [0.05]
+
+
+def test_read_reply_with_spent_timeout_does_not_wait(monkeypatch):
+    monkeypatch.setattr(status.select, "select", lambda *args: pytest.fail("waited after the deadline"))
+    assert status.read_reply(0, timeout=0) == b""
