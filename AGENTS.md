@@ -96,8 +96,11 @@ As of 2026-11-10 the printer is visible in the VM in printer mode
 verified on hardware: model code `0x68`, 24 mm laminated tape, black on white.
 Known-good raw reply:
 `80 20 42 30 68 30 04 00 00 00 18 01 00 00 00 00 00 00 00 00 00 00 00 00 01 08 00 00 00 00 00 00`.
-`pt_print.py` is written and a dry run matches the spec's example header.
-It has not printed yet: after the dry run the printer reported
-"replace media" (error info 2, bit 0) with 24 mm tape still detected. Cause
-unknown. Unverified on hardware: pin orientation (whether `--flip` is needed)
-and the completion reply handling.
+`just print "TEST"` printed on hardware (2026-11-10): 386 raster lines,
+printer replied phase change, phase change, printing completed. Pin orientation
+(whether `--flip` is needed) is not yet confirmed by eye.
+
+The printer queues unsolicited replies (phase change etc.). Both scripts call
+`drain()` before sending, or the first read returns a stale message. An earlier
+"replace media" error was probably such a stale reply or a transient state; it
+cleared by itself.

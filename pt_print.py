@@ -18,6 +18,7 @@ from pt_status import (
     INVALIDATE,
     STATUS_TYPES,
     bits,
+    drain,
     find_device,
     named,
     open_printer,
@@ -103,6 +104,7 @@ def check_ready(status: bytes) -> int:
 def send(node: str, job: bytes) -> None:
     fd = open_printer(node)
     try:
+        drain(fd)
         os.write(fd, job)
         # The printer sends unsolicited status replies (phase change, then
         # printing completed or error).

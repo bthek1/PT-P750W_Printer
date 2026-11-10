@@ -79,9 +79,16 @@ def read_reply(fd: int, timeout: float = 3.0) -> bytes:
     return data
 
 
+def drain(fd: int) -> None:
+    """Discard queued unsolicited replies so the next read answers our request."""
+    while read_reply(fd, timeout=0.2):
+        pass
+
+
 def read_status(node: str, timeout: float = 3.0) -> bytes:
     fd = open_printer(node)
     try:
+        drain(fd)
         os.write(fd, INVALIDATE + INITIALIZE + STATUS_REQUEST)
         return read_reply(fd, timeout)
     finally:

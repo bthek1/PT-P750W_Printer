@@ -95,4 +95,4 @@ error.
 ## Status
 
 USB forwarding and live status work (verified on 24 mm laminated tape).
-Printing is written but not yet verified on hardware.
+Printing works (first label printed on 24 mm tape).
