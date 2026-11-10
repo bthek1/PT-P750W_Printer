@@ -35,7 +35,7 @@ const CHARACTER: Flag[] = ['bold', 'italic', 'underline', 'strike']
 const EFFECTS: Flag[] = ['outline', 'invert', 'border']
 
 const SELECT =
-  'h-8 rounded-md border border-input bg-transparent px-2 text-sm outline-none focus-visible:ring-3 focus-visible:ring-ring/50 dark:bg-input/30'
+  'h-8 rounded-md border border-input bg-transparent px-2 text-sm outline-none focus-visible:ring-3 focus-visible:ring-ring/50 dark:bg-input/30 [&_option]:bg-popover [&_option]:text-popover-foreground'
 
 function flagsFrom(style: LabelStyle, flags: Flag[]): string[] {
   return flags.filter((flag) => style[flag])

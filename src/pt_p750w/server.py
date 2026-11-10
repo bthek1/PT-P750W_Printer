@@ -81,6 +81,13 @@ class Handler(SimpleHTTPRequestHandler):
         else:
             super().do_GET()
 
+    def end_headers(self) -> None:
+        # Without this the browser may keep an old index.html after `just
+        # web-build` and load the previous bundle. Hashed assets revalidate cheaply.
+        if not self.path.startswith("/api/"):
+            self.send_header("Cache-Control", "no-cache")
+        super().end_headers()
+
     def do_POST(self) -> None:
         if urlparse(self.path).path != "/api/print":
             self.send_json(HTTPStatus.NOT_FOUND, {"error": "unknown endpoint"})
