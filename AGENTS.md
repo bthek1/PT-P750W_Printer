@@ -75,8 +75,13 @@ Drive a Brother PT-P750W label printer from Linux.
   during a print returns the cached state with `busy: true`, because reading
   mid-job would steal the "printing completed" reply. Each status poll takes
   about 0.35 s (mostly the 0.2 s drain).
-- `web/`: React 19 + TypeScript + Vite + Tailwind v4, Vitest + Testing
-  Library. `usePrinterStatus` polls every 2 s, pauses while the tab is hidden,
+- `web/`: React 19 + TypeScript + Vite + Tailwind v4 + shadcn/ui (radix
+  base, Nova preset, Lucide icons, Geist font), Vitest + Testing Library.
+  Add components with `npx shadcn@latest add <name>` in `web/`; they land in
+  `src/components/ui/` and are generated code, so leave their style alone.
+  `cn()` comes from the `cn` package (shadcn's replacement for clsx +
+  tailwind-merge). Imports use the `@/` alias for `src/`. Dark mode follows the
+  OS: `main.tsx` toggles the `.dark` class that shadcn's variant expects. `usePrinterStatus` polls every 2 s, pauses while the tab is hidden,
   and keeps retrying when the server is down. Vite proxies `/api` to
   `pt-server` in dev. Tests mock `fetch`: `just web-test`. Build: `just
   web-build`.

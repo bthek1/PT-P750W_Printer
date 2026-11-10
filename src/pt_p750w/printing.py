@@ -112,7 +112,7 @@ def check_ready(status: bytes) -> int:
     return info["tape_mm"]
 
 
-def send(node: str, job: bytes) -> None:
+def send(node: str, job: bytes, timeout: float = 15) -> None:
     fd = open_printer(node)
     try:
         drain(fd)
@@ -120,7 +120,7 @@ def send(node: str, job: bytes) -> None:
         # The printer sends unsolicited status replies (phase change, then
         # printing completed or error).
         for _ in range(6):
-            reply = read_reply(fd, timeout=15)
+            reply = read_reply(fd, timeout)
             if len(reply) != 32:
                 raise PrinterError(f"No completion reply from printer (got {reply.hex(' ') or 'nothing'})")
             kind = reply[18]

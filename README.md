@@ -96,7 +96,8 @@ error.
 
 ### Web UI
 
-A React page shows live printer status and prints the text you type. It
+A React page (Vite, shadcn/ui, Vitest) shows live printer status and prints
+the text you type. It
 needs Node (via `nvm`) for the build.
 
 ```sh
@@ -149,7 +150,7 @@ Do not run a CUPS job and `pt-print` at the same time.
 | `src/pt_p750w/status.py` | `pt-status`: reads and decodes live printer status over USB |
 | `src/pt_p750w/printing.py` | `pt-print`: renders text and prints it as a label |
 | `src/pt_p750w/server.py` | `pt-server`: HTTP API and host for the web UI |
-| `web/` | React + TypeScript + Vite + Tailwind web UI |
+| `web/` | React + TypeScript + Vite + Tailwind + shadcn/ui web UI, Vitest tests |
 | `tests/` | Hermetic tests for the print job, status decoding and API |
 | `udev/99-pt-p750w.rules` | Lets the `plugdev` group use the printer |
 | `justfile` | `status`, `print`, `test`, `serve`, `web-*`, `install` and `install-udev` recipes |

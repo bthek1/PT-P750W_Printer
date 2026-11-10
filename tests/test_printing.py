@@ -1,5 +1,10 @@
+import sys
+
 import pytest
 from PIL import Image
+
+from conftest import GOOD_STATUS, FakePrinter
+from pt_p750w import printing
 
 from pt_p750w.printing import (
     HEAD_PINS,
@@ -7,16 +12,11 @@ from pt_p750w.printing import (
     PRINT_AREA,
     build_job,
     check_ready,
+    make_job,
     raster_lines,
     render,
 )
 from pt_p750w.status import PrinterError
-
-# Status reply captured from the real printer: 24 mm laminated, black on white.
-GOOD_STATUS = bytes.fromhex(
-    "80 20 42 30 68 30 04 00 00 00 18 01 00 00 00 00"
-    "00 00 00 00 00 00 00 00 01 08 00 00 00 00 00 00"
-)
 
 
 def test_print_area_is_centred_on_head():
@@ -92,6 +92,13 @@ def test_check_ready_rejects_error():
         check_ready(bytes(replace_media))
 
 
+def test_check_ready_rejects_unknown_tape_width():
+    odd_tape = bytearray(GOOD_STATUS)
+    odd_tape[10] = 7
+    with pytest.raises(PrinterError, match="Unsupported tape width: 7 mm"):
+        check_ready(bytes(odd_tape))
+
+
 def test_check_ready_rejects_garbage():
     with pytest.raises(PrinterError, match="Bad status"):
         check_ready(b"")
@@ -103,3 +110,85 @@ def test_multiline_text_fits_print_area():
     assert two.height == 128 and two.getextrema()[0] == 0
     # Two lines share the height, so each line is smaller and the label shorter.
     assert two.width < one.width
+
+
+def test_send_waits_for_printing_completed(fake_printer, capsys):
+    _, job = make_job("Hi", 24)
+    phase = FakePrinter.reply(kind=0x06)
+    fake_printer.stale = [phase]  # left over from an earlier job; drain() drops it
+    fake_printer.script = [(job, [phase, phase, FakePrinter.reply(kind=0x01)])]
+    printing.send("/dev/usb/lp0", job)
+    assert fake_printer.received == job
+    assert capsys.readouterr().out.splitlines() == ["printer: phase change", "printer: phase change", "printed"]
+
+
+def test_send_raises_on_error_reply(fake_printer):
+    _, job = make_job("Hi", 24)
+    fake_printer.script = [(job, [FakePrinter.reply(kind=0x02, errors_2=0x10)])]
+    with pytest.raises(PrinterError, match="Print failed: cover open"):
+        printing.send("/dev/usb/lp0", job)
+
+
+def test_send_raises_when_printer_goes_quiet(fake_printer):
+    _, job = make_job("Hi", 24)
+    fake_printer.script = [(job, [])]
+    with pytest.raises(PrinterError, match="No completion reply"):
+        printing.send("/dev/usb/lp0", job, timeout=0.02)
+
+
+def test_send_gives_up_after_too_many_replies(fake_printer):
+    _, job = make_job("Hi", 24)
+    fake_printer.script = [(job, [FakePrinter.reply(kind=0x06)] * 6)]
+    with pytest.raises(PrinterError, match="Gave up"):
+        printing.send("/dev/usb/lp0", job)
+
+
+@pytest.fixture
+def stub_device(monkeypatch):
+    """Printer present with GOOD_STATUS; records the jobs passed to send()."""
+    sent = []
+    monkeypatch.setattr(printing, "find_device", lambda: "/dev/usb/lp0")
+    monkeypatch.setattr(printing, "read_status", lambda node: GOOD_STATUS)
+    monkeypatch.setattr(printing, "send", lambda node, job: sent.append(job))
+    return sent
+
+
+def test_print_text_uses_loaded_tape_width(stub_device):
+    lines = printing.print_text("Hello", cut=False)
+    assert lines > MIN_LENGTH_DOTS
+    assert b"\x1biM\x00" in stub_device[0]  # no cut
+    assert b"\x1biz\x84\x00\x18\x00" in stub_device[0]  # 24 mm tape
+
+
+def test_main_dry_run_writes_preview_without_printer(tmp_path, monkeypatch, capsys):
+    prefix = tmp_path / "label"
+    monkeypatch.setattr(sys, "argv", ["pt-print", "Hello", "world", "--tape", "12", "--dry-run", str(prefix)])
+    monkeypatch.setattr(printing, "find_device", lambda: pytest.fail("dry run touched the printer"))
+    printing.main()
+    assert Image.open(f"{prefix}.png").height == PRINT_AREA[12][1]
+    assert open(f"{prefix}.bin", "rb").read().endswith(b"\x1a")
+    assert "tape 12 mm" in capsys.readouterr().out
+
+
+def test_main_prints_on_printer(stub_device, monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["pt-print", "Hi", "--no-cut"])
+    printing.main()
+    assert len(stub_device) == 1 and b"\x1biM\x00" in stub_device[0]
+
+
+def test_main_refuses_when_printer_reports_error(stub_device, monkeypatch):
+    monkeypatch.setattr(printing, "read_status", lambda node: FakePrinter.reply(errors_2=0x10))
+    monkeypatch.setattr(sys, "argv", ["pt-print", "Hi"])
+    with pytest.raises(SystemExit, match="cover open"):
+        printing.main()
+    assert stub_device == []
+
+
+def test_main_exits_with_message_when_print_fails(stub_device, monkeypatch):
+    def jam(node, job):
+        raise PrinterError("Print failed: cutter jam")
+
+    monkeypatch.setattr(printing, "send", jam)
+    monkeypatch.setattr(sys, "argv", ["pt-print", "Hi"])
+    with pytest.raises(SystemExit, match="cutter jam"):
+        printing.main()

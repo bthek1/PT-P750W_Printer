@@ -1,8 +1,5 @@
 # TODO
 
-- React UI 
-
-- worked in laptop
 
 
 

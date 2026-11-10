@@ -1,17 +1,17 @@
+import io
 import json
+import sys
 import threading
 import urllib.error
 import urllib.request
 
 import pytest
+from PIL import Image
 
+from conftest import GOOD_STATUS
 from pt_p750w import server
+from pt_p750w.printing import PRINT_AREA
 from pt_p750w.status import PrinterError
-
-GOOD_STATUS = bytes.fromhex(
-    "80 20 42 30 68 30 04 00 00 00 18 01 00 00 00 00"
-    "00 00 00 00 00 00 00 00 01 08 00 00 00 00 00 00"
-)
 
 
 @pytest.fixture
@@ -115,3 +115,70 @@ def test_status_during_print_uses_cache(monkeypatch):
     monkeypatch.setattr(server, "find_device", lambda: pytest.fail("touched the device during a print"))
     with printer.lock:
         assert printer.status()["busy"] is True
+
+
+def call_raw(url, data: bytes):
+    request = urllib.request.Request(url, data=data, method="POST")
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            return response.status, response.read()
+    except urllib.error.HTTPError as e:
+        return e.code, e.read()
+
+
+@pytest.mark.parametrize("data, message", [(b"", b"body missing"), (b"{nope", b"not JSON"), (b"x" * 5000, b"too large")])
+def test_print_rejects_bad_body(api, data, message):
+    base, printed = api
+    code, body = call_raw(f"{base}/api/print", data)
+    assert code == 400 and message in body
+    assert printed == []
+
+
+def test_unknown_api_get_returns_404(api):
+    base, _ = api
+    assert call(f"{base}/api/nope")[0] == 404
+
+
+@pytest.mark.parametrize("path", ["/api/nope", "/"])
+def test_post_outside_print_returns_404(api, path):
+    base, printed = api
+    assert call_raw(f"{base}{path}", b"{}")[0] == 404
+    assert printed == []
+
+
+def test_preview_defaults_to_last_seen_tape(api, monkeypatch):
+    base, _ = api
+    twelve_mm = bytearray(GOOD_STATUS)
+    twelve_mm[10] = 12
+    monkeypatch.setattr(server, "read_status", lambda node: bytes(twelve_mm))
+    call(f"{base}/api/status")
+    body = call(f"{base}/api/preview?text=Hi")[2]
+    assert Image.open(io.BytesIO(body)).height == PRINT_AREA[12][1]
+
+
+def test_preview_defaults_to_24mm_before_first_status(api):
+    base, _ = api
+    body = call(f"{base}/api/preview?text=Hi")[2]
+    assert Image.open(io.BytesIO(body)).height == PRINT_AREA[24][1]
+
+
+def test_main_reports_busy_port(monkeypatch, tmp_path):
+    def busy(*args):
+        raise OSError(98, "Address already in use")
+
+    monkeypatch.setattr(server, "make_server", busy)
+    monkeypatch.setattr(sys, "argv", ["pt-server", "--port", "8750", "--web", str(tmp_path)])
+    with pytest.raises(SystemExit, match="Cannot listen on 127.0.0.1:8750: Address already in use"):
+        server.main()
+
+
+def test_main_warns_without_web_ui_and_stops_on_ctrl_c(monkeypatch, tmp_path, capsys):
+    class Interrupted:
+        def serve_forever(self):
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(server, "make_server", lambda *args: Interrupted())
+    monkeypatch.setattr(sys, "argv", ["pt-server", "--web", str(tmp_path)])
+    server.main()
+    out = capsys.readouterr().out
+    assert "no web UI" in out and "serving on http://127.0.0.1:8750" in out

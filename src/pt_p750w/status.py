@@ -10,6 +10,9 @@ import time
 from pathlib import Path
 
 VENDOR, PRODUCT = "04f9", "2062"
+DEV_GLOB = "/dev/usb/lp*"
+USBMISC = Path("/sys/class/usbmisc")
+DRAIN_TIMEOUT = 0.2
 
 INVALIDATE = b"\x00" * 100
 INITIALIZE = b"\x1b@"
@@ -44,8 +47,8 @@ class PrinterError(Exception):
 
 
 def find_device() -> str:
-    for node in sorted(glob.glob("/dev/usb/lp*")):
-        usb_dev = Path("/sys/class/usbmisc", Path(node).name, "device").resolve().parent
+    for node in sorted(glob.glob(DEV_GLOB)):
+        usb_dev = (USBMISC / Path(node).name / "device").resolve().parent
         try:
             ids = ((usb_dev / "idVendor").read_text().strip(), (usb_dev / "idProduct").read_text().strip())
         except FileNotFoundError:
@@ -86,7 +89,7 @@ def read_reply(fd: int, timeout: float = 3.0) -> bytes:
 
 def drain(fd: int) -> None:
     """Discard queued unsolicited replies so the next read answers our request."""
-    while read_reply(fd, timeout=0.2):
+    while read_reply(fd, timeout=DRAIN_TIMEOUT):
         pass
 
 
