@@ -42,6 +42,16 @@ mode, and an ID-based forward loses the printer when it does.
 
 Hold the Editor Lite button until the LED goes off before printing.
 
+## Python environment
+
+The project uses `uv`. Create the virtual environment once:
+
+```sh
+uv sync
+```
+
+`just` recipes run the scripts through `uv run`.
+
 ## Permissions
 
 The printer device belongs to group `lp` by default. Install the udev rule once

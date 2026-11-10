@@ -41,6 +41,8 @@ Drive a Brother PT-P750W label printer from Linux.
 
 ## Code
 
+- Python env: `uv` project (`pyproject.toml`, `uv.lock`, `.venv/`). Run
+  scripts with `uv run`. No third-party dependencies yet.
 - `pt_status.py`: stdlib-only. Finds `/dev/usb/lpN` for `04f9:2062` through
   sysfs, sends invalidate + `ESC @` + `ESC i S`, decodes the 32-byte status
   reply. Run with `just status`.

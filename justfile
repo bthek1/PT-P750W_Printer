@@ -1,6 +1,6 @@
 # Print live printer status (tape, errors)
 status:
-    python3 pt_status.py
+    uv run pt_status.py
 
 # Install the udev rule so plugdev members can use the printer without root
 install-udev:
