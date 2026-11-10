@@ -69,5 +69,4 @@ just status   # tape width, media type, colours, errors
 
 ## Status
 
-USB forwarding works. Live status works once the udev rule is installed. No
-printing code yet.
+USB forwarding and live status work. No printing code yet.

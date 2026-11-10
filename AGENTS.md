@@ -59,5 +59,8 @@ Do not put IPs, VM IDs, serial numbers or home paths in tracked files.
 ## Status
 
 As of 2026-11-10 the printer is visible in the VM in printer mode
-(`04f9:2062`, `/dev/usb/lpN`). Status reading is written but not yet verified
-on hardware: it is waiting on the udev rule install. No printing code yet.
+(`04f9:2062`, `/dev/usb/lpN`). The udev rule is installed. `just status` is
+verified on hardware: model code `0x68`, 24 mm laminated tape, black on white.
+Known-good raw reply:
+`80 20 42 30 68 30 04 00 00 00 18 01 00 00 00 00 00 00 00 00 00 00 00 00 01 08 00 00 00 00 00 00`.
+No printing code yet.
