@@ -81,10 +81,10 @@ Drive a Brother PT-P750W label printer from Linux.
   The spec sends these per page but does not say how the `ESC i A` counter
   behaves when n changes within a job. `--copies` 1 to 99, and labels x
   copies at most 99 per job (the `ESC i A` limit). Checks status first and refuses to print on any error. Then waits
-  for one unsolicited "printing completed" reply per page. Half cut and
-  multi-page jobs are built from the spec but not yet tested on hardware; if
-  the printer sends only one completion per job, `send()` will time out after
-  a successful print. `--dry-run PREFIX` writes a
+  for one unsolicited "printing completed" reply per page. Multi-page jobs
+  with full or half cuts print correctly on hardware (see Status). Not yet
+  confirmed: that one completion arrives per page; if only one comes per job,
+  `send()` will time out after a successful print. `--dry-run PREFIX` writes a
   PNG preview and the raw job. `--flip` reverses pin order. Not needed: the
   default (image row 0 at pin 0) prints readable text, confirmed by eye.
   Several words are joined with spaces. If the DejaVu font is missing it falls
@@ -152,8 +152,9 @@ Drive a Brother PT-P750W label printer from Linux.
   argument a label, joined by half cuts (`|`, or a `---` line in vertical). `/api/preview` returns
   `label_preview()`: the labels side by side with a 28-dot gap, a dashed grey
   line for a half cut and a solid darker line for a full cut. The gap is a
-  guess (two 2 mm feed margins), not measured. Mixed and half cuts are not yet
-  tested on hardware.
+  guess (two 2 mm feed margins), not measured. Full cuts and half cuts
+  between pages work on hardware (see Status). A mix of both in one job is
+  not yet tested.
 - Formatting is one `printing.Style` per label (font family, bold, italic,
   underline, strike, outline, invert, border, align, case, max `size_pt`,
   line spacing, direction). `direction: "vertical"` draws the text on a page
@@ -243,3 +244,18 @@ The printer queues unsolicited replies (phase change etc.). Both scripts call
 `drain()` before sending, or the first read returns a stale message. An earlier
 "replace media" error was probably such a stale reply or a transient state; it
 cleared by itself.
+
+2026-11-11: vertical `AAAA` / `------` / `BBBB` / `------` / `CCCC` (one job,
+3 pages, all `M 40`, `A 01`, `K 08`) printed on 24 mm tape. Every label got
+its full cut, as asked. The printer added on its own: a ~24 mm leader then a
+half cut at the job start (head-to-cutter distance), and after each label a
+half cut at the boundary followed by the full cut 2, 12 and 6 mm later (the
+gap varies, nothing in the job sets it). Spec 2.3.3 lists "minimum margin
+setting with no precut: 24.3 mm", so with our 2 mm margin this is probably
+the printer's precut; a 24.3 mm+ margin should avoid it.
+
+2026-11-11: vertical `01a 01a` / `---` / `02a 02a` / `---` / `03a 03a` (3
+pages, all `M 40`, `A 03`, `K 0C`) printed exactly as intended: 24 mm leader,
+half cut, 01a, half cut, 02a, half cut, 03a, full cut. No extra cuts or
+waste between labels. Mixed half and full cuts in one job (pages with
+different `ESC i A` values) are still untested.

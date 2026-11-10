@@ -152,8 +152,11 @@ a solid line a full cut. Blank lines count: an empty line before or after the
 text makes the label one line longer. Copies (1 to 99, next to Print) repeat
 the whole set. A job holds at most 99 labels (labels x copies).
 
-Brother's raster spec calls the full cut "auto cut". Half cuts and mixed cuts
-have not been checked on the printer yet.
+Brother's raster spec calls the full cut "auto cut". Half cuts and full cuts
+both work on the printer. Every job starts with about 24 mm of blank tape (the
+distance from the print head to the cutter). With a full cut, the printer
+also adds its own half cut a few mm before it, leaving a small waste tail you
+peel off. A mix of half and full cuts in one job has not been checked yet.
 
 The toolbar formats the whole label (the printer prints one colour, so
 per-character options such as colour, highlight or subscript do not apply):
