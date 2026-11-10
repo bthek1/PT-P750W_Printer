@@ -8,6 +8,7 @@ Anything else is served from the built web UI directory.
 import argparse
 import io
 import json
+import sys
 import threading
 from datetime import UTC, datetime
 from functools import partial
@@ -161,7 +162,11 @@ def main() -> None:
     args = parser.parse_args()
     if not (args.web / "index.html").is_file():
         print(f"warning: no web UI in {args.web}; only /api works. Build it with `just web-build`.")
-    server = make_server(args.host, args.port, args.web)
+    try:
+        server = make_server(args.host, args.port, args.web)
+    except OSError as e:
+        sys.exit(f"Cannot listen on {args.host}:{args.port}: {e.strerror}. "
+                 f"Another pt-server may be running (`ss -ltnp | grep {args.port}`), or use --port.")
     print(f"serving on http://{args.host}:{args.port}")
     try:
         server.serve_forever()
