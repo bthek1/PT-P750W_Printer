@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { DEFAULT_STYLE, fetchStatus, previewUrl, printLabel } from './api'
+import { DEFAULT_STYLE, fetchFitSize, fetchStatus, previewUrl, printLabel } from './api'
 
 afterEach(() => vi.unstubAllGlobals())
 
@@ -26,6 +26,18 @@ describe('api', () => {
   it('fails the status call on an HTTP error', async () => {
     respond('oops', 502)
     await expect(fetchStatus()).rejects.toThrow('HTTP 502')
+  })
+
+  it('asks the fit endpoint with the preview query', async () => {
+    respond(JSON.stringify({ size_pt: 51.2 }))
+    await expect(fetchFitSize(previewUrl('Hi', 12))).resolves.toBe(51.2)
+    const [url] = vi.mocked(fetch).mock.calls[0] as unknown as [string]
+    expect(new URL(url, 'http://x').pathname).toBe('/api/fit')
+  })
+
+  it('fails the fit call on an HTTP error', async () => {
+    respond('{}', 400)
+    await expect(fetchFitSize(previewUrl('Hi', 12))).rejects.toThrow('HTTP 400')
   })
 
   it('returns the print result', async () => {

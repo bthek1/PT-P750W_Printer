@@ -14,6 +14,7 @@ from pt_p750w.printing import (
     apply_case,
     build_job,
     check_ready,
+    fitted_size_pt,
     make_job,
     raster_lines,
     render,
@@ -214,6 +215,7 @@ def test_default_style_is_bold_sans_centred():
     ({"align": "justify"}, "align must be one of"),
     ({"case": "toggle"}, "case must be one of"),
     ({"line_spacing": 3}, "line_spacing must be one of"),
+    ({"direction": "diagonal"}, "direction must be one of"),
     ({"size_pt": 2}, "size_pt must be"),
     ({"size_pt": 12.5}, "size_pt must be"),
     ({"size_pt": True}, "size_pt must be"),
@@ -225,7 +227,8 @@ def test_style_rejects_bad_input(data, message):
 
 def test_style_accepts_full_input():
     data = {"font": "mono", "bold": False, "italic": True, "underline": True, "strike": True, "outline": True,
-            "invert": True, "border": True, "align": "right", "case": "upper", "size_pt": 12, "line_spacing": 1.5}
+            "invert": True, "border": True, "align": "right", "case": "upper", "size_pt": 12, "line_spacing": 1.5,
+            "direction": "vertical"}
     assert Style.from_dict(data) == Style(**data)
     assert Style.from_dict(None) == Style()
 
@@ -241,6 +244,7 @@ def test_apply_case(case, expected):
 @pytest.mark.parametrize("style", [
     Style(underline=True), Style(strike=True), Style(outline=True), Style(border=True), Style(invert=True),
     Style(italic=True, font="serif"), Style(line_spacing=2.0), Style(align="left"), Style(align="right"),
+    Style(direction="vertical"), Style(direction="vertical", border=True, underline=True),
 ])
 @pytest.mark.parametrize("tape_mm", [4, 24])
 def test_every_style_fits_print_area(style, tape_mm):
@@ -305,3 +309,34 @@ def test_main_rejects_bad_style_json(monkeypatch):
     monkeypatch.setattr(sys, "argv", ["pt-print", "Hi", "--style", '{"align": 1}'])
     with pytest.raises(SystemExit, match="Bad --style: align must be one of"):
         printing.main()
+
+
+def test_fitted_size_matches_tape_and_style():
+    # Narrower tape and a smaller maximum both give a smaller font. Size is in points (2.5 dots each).
+    wide, narrow = fitted_size_pt("Hello", 24), fitted_size_pt("Hello", 12)
+    assert narrow < wide <= 128 / 2.5
+    assert fitted_size_pt("Hello", 24, Style(size_pt=10)) == 10
+
+
+def test_vertical_text_runs_across_the_tape():
+    # Long text: horizontal gets a long label, vertical shrinks the font to fit
+    # the line across the tape, so the label stays short.
+    text = "PATCH PANEL 12"
+    horizontal, vertical = render(text, 128), render(text, 128, Style(direction="vertical"))
+    assert vertical.height == 128
+    assert vertical.width < horizontal.width
+    assert fitted_size_pt(text, 24, Style(direction="vertical")) < fitted_size_pt(text, 24)
+
+
+def test_vertical_lines_add_label_length():
+    style = Style(direction="vertical")
+    assert render("A\nB\nC", 128, style).width > render("A", 128, style).width
+
+
+def test_vertical_text_reads_top_to_bottom():
+    # Turned clockwise: the line's first letter is at the top of the tape.
+    image = render("L      .", 128, Style(direction="vertical", align="left"))
+    top, bottom = ink_rows(image)[0], ink_rows(image)[-1]
+    def ink_in(rows):
+        return sum(image.getpixel((x, y)) == 0 for x in range(image.width) for y in rows)
+    assert ink_in(range(top, top + 20)) > ink_in(range(bottom - 20, bottom + 1))

@@ -63,6 +63,15 @@ describe('FormatToolbar', () => {
     expect(onChange).not.toHaveBeenCalled()
   })
 
+  it('sets text direction and never leaves it empty', () => {
+    const onChange = setup()
+    fireEvent.click(screen.getByRole('radio', { name: 'Vertical' }))
+    expect(onChange).toHaveBeenLastCalledWith({ ...DEFAULT_STYLE, direction: 'vertical' })
+    onChange.mockClear()
+    fireEvent.click(screen.getByRole('radio', { name: 'Horizontal' }))
+    expect(onChange).not.toHaveBeenCalled()
+  })
+
   it('clear formatting restores the defaults and is disabled at the defaults', () => {
     const onChange = setup({ ...DEFAULT_STYLE, invert: true, font: 'serif' })
     fireEvent.click(screen.getByRole('button', { name: 'Clear formatting' }))

@@ -32,6 +32,7 @@ export type LabelStyle = {
   case: 'none' | 'upper' | 'lower' | 'title'
   size_pt: number | null
   line_spacing: 1 | 1.5 | 2
+  direction: 'horizontal' | 'vertical'
 }
 
 export const DEFAULT_STYLE: LabelStyle = {
@@ -47,6 +48,7 @@ export const DEFAULT_STYLE: LabelStyle = {
   case: 'none',
   size_pt: null,
   line_spacing: 1,
+  direction: 'horizontal',
 }
 
 export type Flag = 'bold' | 'italic' | 'underline' | 'strike' | 'outline' | 'invert' | 'border'
@@ -72,6 +74,13 @@ export async function printLabel(text: string, cut: boolean, style = DEFAULT_STY
   const data = await response.json().catch(() => ({ error: `HTTP ${response.status}` }))
   if (!response.ok) throw new Error(data.error ?? `HTTP ${response.status}`)
   return data
+}
+
+/** The font size, in points, that the renderer picks for this label. */
+export async function fetchFitSize(previewUrl: string, signal?: AbortSignal): Promise<number> {
+  const response = await fetch(previewUrl.replace('/api/preview', '/api/fit'), { signal })
+  if (!response.ok) throw new Error(`fit request failed: HTTP ${response.status}`)
+  return (await response.json()).size_pt
 }
 
 export function previewUrl(text: string, tapeMm: number, style = DEFAULT_STYLE): string {

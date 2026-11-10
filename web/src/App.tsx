@@ -7,13 +7,16 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Checkbox } from '@/components/ui/checkbox'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
-import { DEFAULT_STYLE, previewUrl, printLabel, toggleFlag, type Flag, type LabelStyle } from './api'
+import { DEFAULT_STYLE, fetchFitSize, previewUrl, printLabel, toggleFlag, type Flag, type LabelStyle } from './api'
 import { FormatToolbar } from './FormatToolbar'
+import { Ruler } from './Ruler'
 import { usePrinterStatus, type Connection } from './usePrinterStatus'
 
 const DEFAULT_TAPE_MM = 24
 const MAX_TEXT = 200
 const DOTS_PER_MM = 180 / 25.4
+// The length ruler is clipped to the preview width, so this only has to exceed the widest screen.
+const RULER_SLACK_MM = 300
 // Browsers keep Ctrl+L/E/R (address bar, search, reload), so only these are bound.
 const SHORTCUTS: Record<string, Flag> = { b: 'bold', i: 'italic', u: 'underline' }
 
@@ -47,6 +50,18 @@ function useDebounced<T>(value: T, ms: number): T {
   return debounced
 }
 
+/** Size the renderer picks for the auto option. Keeps the last value while the next one loads. */
+function useAutoSize(preview: string): number | null {
+  const [size, setSize] = useState<number | null>(null)
+  useEffect(() => {
+    if (!preview) return
+    const controller = new AbortController()
+    fetchFitSize(preview, controller.signal).then(setSize, () => {})
+    return () => controller.abort()
+  }, [preview])
+  return preview ? size : null
+}
+
 type PrintState =
   | { state: 'idle' }
   | { state: 'printing' }
@@ -64,8 +79,11 @@ export default function App() {
   const data = connection.state === 'online' ? connection.data : null
   const info = data?.status ?? null
   const tapeMm = info?.tape_mm ?? DEFAULT_TAPE_MM
+  const tapePx = Math.round(tapeMm * DOTS_PER_MM)
   const badge = badgeFor(connection)
   const preview = useDebounced(text.trim() ? previewUrl(text, tapeMm, style) : '', 300)
+  const labelMm = preview && previewWidth ? Math.round((previewWidth / DOTS_PER_MM) * 10) / 10 : null
+  const autoSizePt = useAutoSize(style.size_pt === null ? preview : '')
   const canPrint = badge.tone === 'ready' && text.trim() !== '' && job.state !== 'printing'
 
   async function print() {
@@ -151,21 +169,51 @@ export default function App() {
               />
             </div>
 
-            <FormatToolbar style={style} onChange={setStyle} />
+            <FormatToolbar style={style} onChange={setStyle} autoSizePt={autoSizePt} />
 
             <div className="flex flex-col gap-2">
               <Label>Preview</Label>
-              <div className="overflow-x-auto rounded-md border border-dashed bg-white p-3">
-                {preview ? (
-                  <img
-                    src={preview}
-                    alt="Label preview"
-                    className="h-16 max-w-none [image-rendering:pixelated]"
-                    onLoad={(event) => setPreviewWidth(event.currentTarget.naturalWidth)}
-                  />
-                ) : (
-                  <p className="py-5 text-center text-sm text-neutral-400">Preview appears here</p>
-                )}
+              <div className="flex items-start gap-2 rounded-md border border-dashed p-3">
+                <Ruler
+                  orientation="vertical"
+                  mm={tapeMm}
+                  pxPerMm={DOTS_PER_MM}
+                  label={`Tape width ruler, 0 to ${tapeMm} mm`}
+                />
+                <div className="min-w-0 flex-1 overflow-x-auto pb-1">
+                  <div className="w-max min-w-full">
+                    {/* 1 CSS px per printer dot: the tape is drawn to scale and the bitmap at a whole-number scale. */}
+                    <div
+                      data-testid="tape"
+                      className="flex w-max min-w-24 items-center justify-center bg-white shadow-sm ring-1 ring-border"
+                      style={{ height: tapePx }}
+                    >
+                      {preview ? (
+                        <img
+                          src={preview}
+                          alt="Label preview"
+                          className="max-w-none [image-rendering:pixelated]"
+                          onLoad={(event) => setPreviewWidth(event.currentTarget.naturalWidth)}
+                        />
+                      ) : (
+                        <p className="px-4 text-center text-sm text-neutral-400">Preview appears here</p>
+                      )}
+                    </div>
+                    {/* Absolute, so the long ruler fills the preview width without widening the scroll area.
+                        overflow-clip, not hidden: a hidden box can still be scrolled (find-in-page, scrollIntoView). */}
+                    <div className="relative h-[22px] overflow-clip">
+                      <div className="absolute top-0 left-0">
+                        <Ruler
+                          orientation="horizontal"
+                          mm={(labelMm ?? 0) + RULER_SLACK_MM}
+                          pxPerMm={DOTS_PER_MM}
+                          marker={labelMm ?? undefined}
+                          label={labelMm === null ? 'Length ruler' : `Length ruler, label ${labelMm.toFixed(1)} mm`}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
               </div>
               {preview && previewWidth && (
                 <p className="text-xs text-muted-foreground">

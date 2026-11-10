@@ -127,6 +127,7 @@ per-character options such as colour, highlight or subscript do not apply):
 | Case (`case`) | `none`, `upper`, `lower`, `title` | |
 | Alignment (`align`) | `left`, `center`, `right` | |
 | `line_spacing` | 1.0, 1.5, 2.0 | |
+| Text direction (`direction`) | `horizontal` (along the tape), `vertical` (turned 90 degrees, lines run across the tape) | |
 | `outline`, `invert` (white on black), `border` | true / false | |
 
 Text always shrinks to fit the tape, so a fixed size is an upper limit.
@@ -143,6 +144,7 @@ Vite (port 5173) forwards `/api` to the server.
 |---|---|
 | `GET /api/status` | Live status as JSON (`connected`, `busy`, `error`, `status`) |
 | `GET /api/preview?text=...&tape=24&style={...}` | PNG of the label; `tape` and `style` are optional |
+| `GET /api/fit?text=...&tape=24&style={...}` | Font size the renderer picks, as `{"size_pt": 51.2}`; same query as preview |
 | `POST /api/print` | `{"text": "...", "cut": true, "style": {...}}`; returns 400 for a bad style, 409 with `error` if the printer is not ready |
 
 Do not run `pt-print` while `pt-server` is printing.

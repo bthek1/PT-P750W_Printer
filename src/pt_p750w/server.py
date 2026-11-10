@@ -3,6 +3,7 @@
 GET  /api/status            live status, re-read from the printer on each call
 GET  /api/preview?text=...  PNG of the label as it would print on the loaded tape.
                             Optional tape=<mm> and style=<JSON, see printing.Style>.
+GET  /api/fit?text=...      font size the renderer picks, as {"size_pt": 51.2}. Same query as preview.
 POST /api/print             {"text": "...", "cut": true, "style": {...}}
 Anything else is served from the built web UI directory.
 """
@@ -18,7 +19,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from pt_p750w.printing import PRINT_AREA, Style, make_job, print_text
+from pt_p750w.printing import PRINT_AREA, Style, fitted_size_pt, make_job, print_text
 from pt_p750w.status import PrinterError, decode, find_device, read_status
 
 MAX_TEXT = 200
@@ -76,6 +77,8 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_json(HTTPStatus.OK, self.printer.status())
         elif url.path == "/api/preview":
             self.preview(parse_qs(url.query))
+        elif url.path == "/api/fit":
+            self.fit(parse_qs(url.query))
         elif url.path.startswith("/api/"):
             self.send_json(HTTPStatus.NOT_FOUND, {"error": "unknown endpoint"})
         else:
@@ -106,16 +109,26 @@ class Handler(SimpleHTTPRequestHandler):
             return
         self.send_json(HTTPStatus.OK, {"ok": True, "raster_lines": lines, "length_mm": round(lines / 180 * 25.4, 1)})
 
-    def preview(self, query: dict) -> None:
+    def label_query(self, query: dict) -> tuple[str, int, Style] | None:
+        """Parse text, tape and style for preview and fit. Sends a 400 and returns None if invalid."""
         try:
             text = clean_text(query.get("text", [""])[0])
             tape = int(query.get("tape", [self.printer.tape_mm()])[0])
             if tape not in PRINT_AREA:
                 raise ValueError(f"tape must be one of {sorted(PRINT_AREA)}")
-            style = Style.from_dict(json.loads(query.get("style", ["{}"])[0]))
+            return text, tape, Style.from_dict(json.loads(query.get("style", ["{}"])[0]))
         except ValueError as e:
             self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(e)})
+            return None
+
+    def fit(self, query: dict) -> None:
+        if parsed := self.label_query(query):
+            self.send_json(HTTPStatus.OK, {"size_pt": fitted_size_pt(*parsed)})
+
+    def preview(self, query: dict) -> None:
+        if not (parsed := self.label_query(query)):
             return
+        text, tape, style = parsed
         image, _ = make_job(text, tape, style=style)
         png = io.BytesIO()
         image.convert("L").save(png, "PNG")

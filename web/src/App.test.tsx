@@ -29,6 +29,7 @@ function mockServer(status: StatusResponse | 'down', print = json({ ok: true, ra
   const fetchMock = vi.fn((url: string) => {
     if (url === '/api/status') return status === 'down' ? Promise.reject(new TypeError('fetch failed')) : json(status)
     if (url === '/api/print') return print
+    if (url.startsWith('/api/fit?')) return json({ size_pt: 51.2 })
     return json({ error: 'unexpected' }, 404)
   })
   vi.stubGlobal('fetch', fetchMock)
@@ -45,7 +46,7 @@ describe('App', () => {
     mockServer(READY)
     render(<App />)
     expect(await screen.findByRole('status')).toHaveTextContent('Ready')
-    expect(screen.getByText('24 mm')).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'Printer status' })).toHaveTextContent('24 mm')
     expect(screen.getByText('black on white')).toBeInTheDocument()
   })
 
@@ -94,6 +95,11 @@ describe('App', () => {
     render(<App />)
     await screen.findByText('Ready')
     expect(screen.getByText('Preview appears here')).toBeInTheDocument()
+    const side = screen.getByRole('img', { name: 'Tape width ruler, 0 to 12 mm' })
+    expect(side).toHaveTextContent('0')
+    expect(side).toHaveTextContent('12 mm')
+    // Half the height of 24 mm tape (170 px), at 1 px per 180 dpi dot.
+    expect(screen.getByTestId('tape')).toHaveStyle({ height: '85px' })
     fireEvent.change(screen.getByLabelText(/Label text/), { target: { value: 'Hi\nthere' } })
     const preview = await screen.findByAltText('Label preview')
     const url = new URL(preview.getAttribute('src')!, 'http://x')
@@ -169,6 +175,7 @@ describe('App', () => {
     fireEvent.click(screen.getByRole('button', { name: /Bold/ }))
     fireEvent.click(screen.getByRole('button', { name: 'White on black' }))
     fireEvent.click(screen.getByRole('button', { name: 'Border' }))
+    fireEvent.click(screen.getByRole('radio', { name: 'Vertical' }))
     const expected = {
       ...DEFAULT_STYLE,
       font: 'serif',
@@ -180,6 +187,7 @@ describe('App', () => {
       bold: false,
       invert: true,
       border: true,
+      direction: 'vertical',
     }
     await waitFor(() => {
       const src = screen.getByAltText('Label preview').getAttribute('src')!
@@ -235,6 +243,25 @@ describe('App', () => {
     Object.defineProperty(preview, 'naturalWidth', { value: 709 })
     fireEvent.load(preview)
     expect(await screen.findByText('About 100 mm of text on 24 mm tape, plus feed margins.')).toBeInTheDocument()
+    // The ruler runs past the label; the marker shows where the label ends.
+    const length = screen.getByRole('img', { name: 'Length ruler, label 100.0 mm' })
+    expect(Number(length.getAttribute('width'))).toBeGreaterThan(709)
+    expect(screen.getByTestId('ruler-marker')).toHaveTextContent('100 mm')
+  })
+
+  it('shows the fitted size on the auto size option', async () => {
+    const fetchMock = mockServer(READY)
+    render(<App />)
+    await screen.findByText('Ready')
+    expect(screen.getByRole('option', { name: 'Auto size' })).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText(/Label text/), { target: { value: 'Hi' } })
+    expect(await screen.findByRole('option', { name: '51 pt (max)' })).toBeInTheDocument()
+    const fit = new URL(fetchMock.mock.calls.map(([url]) => url).find((url) => url.startsWith('/api/fit?'))!, 'http://x')
+    expect(fit.searchParams.get('text')).toBe('Hi')
+    expect(fit.searchParams.get('tape')).toBe('24')
+    // Clearing the text drops the stale number.
+    fireEvent.change(screen.getByLabelText(/Label text/), { target: { value: '' } })
+    expect(await screen.findByRole('option', { name: 'Auto size' })).toBeInTheDocument()
   })
 
   it('updates the preview when only the style changes', async () => {

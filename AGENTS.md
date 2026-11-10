@@ -46,7 +46,10 @@ Drive a Brother PT-P750W label printer from Linux.
   `[project.scripts]`). Runtime dependency: Pillow. Dev dependency: pytest.
 - Library functions raise `PrinterError` (in `status.py`). Only the CLI
   `main()` functions turn it into `sys.exit`, so the server can reuse them.
-- Tests: `just test`. Hermetic (no printer): 129 tests in about 0.6 s. They
+- Test recipes (`test`, `web-test`, `coverage`) take `/tmp/agent-tests.lock`
+  themselves. Call them directly. Wrapping `just` in another `flock` on the
+  same file deadlocks: the outer lock blocks the inner one forever.
+- Tests: `just test`. Hermetic (no printer): 140 tests in about 0.7 s. They
   check the job against the spec's example bytes and the known-good status
   reply. `tests/conftest.py` has `fake_printer`: a socketpair that plays the
   printer, so the real `read_reply`/`drain`/`send` code runs without USB. Its
@@ -79,7 +82,8 @@ Drive a Brother PT-P750W label printer from Linux.
   sysfs, sends invalidate + `ESC @` + `ESC i S`, decodes the 32-byte status
   reply. Run with `just status`.
 - `src/pt_p750w/server.py` (`pt-server`): stdlib `ThreadingHTTPServer` on
-  `127.0.0.1:8750`. `/api/status`, `/api/preview`, `/api/print`, and static
+  `127.0.0.1:8750`. `/api/status`, `/api/preview`, `/api/fit` (the font size the
+  renderer picks, for the "N pt (max)" auto option), `/api/print`, and static
   files from `web/dist`. One lock guards the USB device. A status request
   during a print returns the cached state with `busy: true`, because reading
   mid-job would steal the "printing completed" reply. Each status poll takes
@@ -99,11 +103,20 @@ Drive a Brother PT-P750W label printer from Linux.
   extension (`vitest.explorer`, recommended in `.vscode/extensions.json`). It
   finds `web/vite.config.ts` on its own. Build: `just
   web-build`.
+- The UI preview draws the tape to scale at 1 CSS px per printer dot (24 mm
+  tape = 170 px tall, 12 mm = 85 px). `Ruler.tsx` draws a 0 to tape-width mm
+  scale on the left and a label-length scale under the tape. The bitmap
+  shows at its natural size, so `image-rendering: pixelated` stays crisp. Do
+  not shrink it with a fixed CSS height: nearest-neighbour downscaling drops
+  rows and breaks thin strokes.
 - `render()` accepts newlines (several lines). The CLI joins its
   arguments with spaces, so only the API produces multi-line labels.
 - Formatting is one `printing.Style` per label (font family, bold, italic,
   underline, strike, outline, invert, border, align, case, max `size_pt`,
-  line spacing). Defaults reproduce the original look: DejaVu Sans Bold,
+  line spacing, direction). `direction: "vertical"` draws the text on a page
+  as wide as the tape, then turns it 90 degrees clockwise: each line runs
+  across the tape (reads top to bottom), fit limits the longest line to the
+  print area, and each extra line adds label length. Defaults reproduce the original look: DejaVu Sans Bold,
   centred, fit to tape. `Style.from_dict` validates API and `--style` JSON
   and raises `ValueError` (400 in the server). The UI mirrors it as
   `LabelStyle` in `web/src/api.ts` and the toolbar in `FormatToolbar.tsx`;

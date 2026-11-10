@@ -45,7 +45,14 @@ function withFlags(style: LabelStyle, flags: Flag[], on: string[]): LabelStyle {
   return { ...style, ...Object.fromEntries(flags.map((flag) => [flag, on.includes(flag)])) }
 }
 
-export function FormatToolbar({ style, onChange }: { style: LabelStyle; onChange: (style: LabelStyle) => void }) {
+type Props = {
+  style: LabelStyle
+  onChange: (style: LabelStyle) => void
+  /** The size the renderer picked to fit the tape, shown on the auto option. Null until known. */
+  autoSizePt?: number | null
+}
+
+export function FormatToolbar({ style, onChange, autoSizePt = null }: Props) {
   const set = <K extends keyof LabelStyle>(key: K, value: LabelStyle[K]) => onChange({ ...style, [key]: value })
 
   return (
@@ -56,8 +63,8 @@ export function FormatToolbar({ style, onChange }: { style: LabelStyle; onChange
       </select>
       <select aria-label="Font size" className={SELECT} value={style.size_pt ?? ''}
         onChange={(event) => set('size_pt', event.target.value ? Number(event.target.value) : null)}>
-        <option value="">Auto size</option>
-        {SIZES.map((size) => <option key={size} value={size}>{size} pt max</option>)}
+        <option value="">{autoSizePt === null ? 'Auto size' : `${Math.round(autoSizePt)} pt (max)`}</option>
+        {SIZES.map((size) => <option key={size} value={size}>{size} pt</option>)}
       </select>
 
       <ToggleGroup type="multiple" variant="outline" size="sm" spacing={0} aria-label="Character formatting"
@@ -84,6 +91,15 @@ export function FormatToolbar({ style, onChange }: { style: LabelStyle; onChange
         onChange={(event) => set('line_spacing', Number(event.target.value) as LabelStyle['line_spacing'])}>
         {SPACINGS.map((spacing) => <option key={spacing} value={spacing}>{spacing.toFixed(1)} line spacing</option>)}
       </select>
+
+      <ToggleGroup type="single" variant="outline" size="sm" spacing={0} aria-label="Text direction"
+        value={style.direction}
+        onValueChange={(direction) => direction && set('direction', direction as LabelStyle['direction'])}>
+        <ToggleGroupItem value="horizontal" title="Text runs along the tape">Horizontal</ToggleGroupItem>
+        <ToggleGroupItem value="vertical" title="Text turned 90 degrees, lines run across the tape">
+          Vertical
+        </ToggleGroupItem>
+      </ToggleGroup>
 
       <ToggleGroup type="multiple" variant="outline" size="sm" spacing={0} aria-label="Effects"
         value={flagsFrom(style, EFFECTS)} onValueChange={(on) => onChange(withFlags(style, EFFECTS, on))}>

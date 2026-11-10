@@ -49,6 +49,7 @@ FONTS = {
 ALIGNS = ("left", "center", "right")
 CASES = ("none", "upper", "lower", "title")
 LINE_SPACINGS = (1.0, 1.5, 2.0)
+DIRECTIONS = ("horizontal", "vertical")
 SIZE_PT_RANGE = (4, 72)
 DOTS_PER_PT = 180 / 72
 
@@ -73,6 +74,7 @@ class Style:
     case: str = "none"
     size_pt: int | None = None  # None fits the tape; a number is a maximum
     line_spacing: float = 1.0
+    direction: str = "horizontal"  # vertical turns the text 90 degrees, lines run across the tape
 
     @classmethod
     def from_dict(cls, data: object) -> "Style":
@@ -87,7 +89,8 @@ class Style:
         for name in ("bold", "italic", "underline", "strike", "outline", "invert", "border"):
             if not isinstance(data.get(name, False), bool):
                 raise ValueError(f"{name} must be true or false")
-        choices = {"font": tuple(FONTS), "align": ALIGNS, "case": CASES, "line_spacing": LINE_SPACINGS}
+        choices = {"font": tuple(FONTS), "align": ALIGNS, "case": CASES, "line_spacing": LINE_SPACINGS,
+                   "direction": DIRECTIONS}
         for name, allowed in choices.items():
             if name in data and data[name] not in allowed:
                 raise ValueError(f"{name} must be one of {', '.join(map(str, allowed))}")
@@ -149,38 +152,69 @@ def underline_offset(size: int) -> int:
     return max(1, size // 10)
 
 
-def render(text: str, pins: int, style: Style = Style(), font_path: str | None = None) -> Image.Image:
-    """Render text as a 1-bit image: height = print area pins, width = label length.
+def border_width(pins: int, style: Style) -> int:
+    return max(2, pins // 24) if style.border else 0
 
-    Newlines give several lines across the tape. Text shrinks until it fits.
+
+def fit(lines: list[str], pins: int, style: Style, font_path: str | None = None):
+    """Largest font size (in dots) up to the style's maximum that fits the print area.
+
+    Horizontal text must fit the block height across the tape, vertical text
+    the longest line. Returns (size, font, line boxes).
     """
-    lines = apply_case(text, style.case).split("\n")
-    frame = max(2, pins // 24) if style.border else 0
-    target = int((pins - 4 * frame) * 0.85)
+    target = int((pins - 4 * border_width(pins, style)) * 0.85)
     size = pins if style.size_pt is None else min(pins, round(style.size_pt * DOTS_PER_PT))
     while True:
         font = load_font(font_path or style.font_file(), size)
         boxes = layout(lines, font, size, style)
-        top = min(b[1] for b in boxes)
-        bottom = max(b[3] for b in boxes)
-        if bottom - top <= target or size <= 4:
-            break
+        if style.direction == "vertical":
+            across = max(b[2] for b in boxes) - min(b[0] for b in boxes)
+        else:
+            across = max(b[3] for b in boxes) - min(b[1] for b in boxes)
+        if across <= target or size <= 4:
+            return size, font, boxes
         size -= 1
+
+
+def fitted_size_pt(text: str, tape_mm: int, style: Style = Style()) -> float:
+    """The font size, in points, that render() uses for this text on this tape."""
+    size, _, _ = fit(apply_case(text, style.case).split("\n"), PRINT_AREA[tape_mm][1], style)
+    return round(size / DOTS_PER_PT, 1)
+
+
+def render(text: str, pins: int, style: Style = Style(), font_path: str | None = None) -> Image.Image:
+    """Render text as a 1-bit image: height = print area pins, width = label length.
+
+    Newlines give several lines. Text shrinks until it fits. Vertical text is
+    drawn on a page as wide as the tape, then turned clockwise so it reads top
+    to bottom across the tape.
+    """
+    lines = apply_case(text, style.case).split("\n")
+    frame = border_width(pins, style)
+    size, font, boxes = fit(lines, pins, style, font_path)
+    top = min(b[1] for b in boxes)
+    bottom = max(b[3] for b in boxes)
 
     block_left = min(b[0] for b in boxes)
     block_width = max(b[2] for b in boxes) - block_left
     pad = pins // 8 + 2 * frame
-    width = max(block_width + 2 * pad, MIN_LENGTH_DOTS)
+    vertical = style.direction == "vertical"
+    if vertical:
+        width, height = pins, max(bottom - top + 2 * pad, MIN_LENGTH_DOTS)
+        x0 = (width - block_width) // 2
+    else:
+        width, height = max(block_width + 2 * pad, MIN_LENGTH_DOTS), pins
+        x0 = pad
     ink, paper = (1, 0) if style.invert else (0, 1)
-    image = Image.new("1", (width, pins), paper)
+    image = Image.new("1", (width, height), paper)
     draw = ImageDraw.Draw(image)
-    y0 = (pins - (bottom - top)) // 2 - top
+    y0 = (height - (bottom - top)) // 2 - top
     pitch = round(sum(font.getmetrics()) * style.line_spacing)
     rule = rule_width(size)
     for i, (line, (left, _, right, _)) in enumerate(zip(lines, boxes)):
         spare = block_width - (right - left)
         shift = {"left": 0, "center": spare // 2, "right": spare}[style.align]
-        x = pad + shift - left
+        x = x0 + shift - left
         baseline = y0 + i * pitch
         if style.outline:
             draw.text((x, baseline), line, font=font, anchor="ls", fill=paper,
@@ -197,8 +231,8 @@ def render(text: str, pins: int, style: Style = Style(), font_path: str | None =
             y = baseline - round(size * 0.3)
             draw.rectangle((ink_left, y, ink_right, y + rule - 1), fill=ink)
     if frame:
-        draw.rectangle((frame, frame, width - 1 - frame, pins - 1 - frame), outline=ink, width=frame)
-    return image
+        draw.rectangle((frame, frame, width - 1 - frame, height - 1 - frame), outline=ink, width=frame)
+    return image.transpose(Image.Transpose.ROTATE_270) if vertical else image
 
 
 def raster_lines(image: Image.Image, left_pins: int, flip: bool) -> list[bytes]:

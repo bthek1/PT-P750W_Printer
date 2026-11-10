@@ -104,6 +104,21 @@ def test_preview_rejects_unknown_tape(api):
     assert call(f"{base}/api/preview?text=Hi&tape=7")[0] == 400
 
 
+def test_fit_reports_the_chosen_font_size(api):
+    base, _ = api
+    # One short line on 24 mm tape fits at about 51 pt. Two lines must be smaller.
+    one = json.loads(call(f"{base}/api/fit?text=Hi&tape=24")[2])["size_pt"]
+    two = json.loads(call(f"{base}/api/fit?text=Hi%0Athere&tape=24")[2])["size_pt"]
+    assert 40 < one <= 128 / 2.5 and two < one
+    query = urllib.parse.urlencode({"text": "Hi", "tape": 24, "style": json.dumps({"size_pt": 10})})
+    assert json.loads(call(f"{base}/api/fit?{query}")[2]) == {"size_pt": 10.0}
+
+
+def test_fit_rejects_unknown_tape(api):
+    base, _ = api
+    assert call(f"{base}/api/fit?text=Hi&tape=7")[0] == 400
+
+
 def test_serves_web_ui(api):
     base, _ = api
     with urllib.request.urlopen(f"{base}/", timeout=5) as response:
