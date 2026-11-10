@@ -45,9 +45,10 @@ Drive a Brother PT-P750W label printer from Linux.
   Console scripts `pt-print` and `pt-status` (see `[project.scripts]`). Runtime
   dependency: Pillow. Dev dependency: pytest.
 - Tests: `just test`. Hermetic (no printer), under 0.1 s. They check the job
-  against the spec's example bytes and the known-good status reply. pytest
-  needs `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`: the user's ROS 2 `PYTHONPATH` injects
-  `launch_testing` plugins that fail to import.
+  against the spec's example bytes and the known-good status reply.
+  `pyproject.toml` sets `addopts = ["--disable-plugin-autoload"]` (pytest 8.4+):
+  the user's ROS 2 `PYTHONPATH` injects `launch_testing` plugins that fail to
+  import. Keep it there, not in an env var, so VS Code test discovery works too.
 - To test the installed package: `uv build --wheel -o <dir>`, then
   `env -u PYTHONPATH uv run --isolated --no-project --with <wheel> pt-status`.
 - Spec: Brother "Raster Command Reference" for PT-E550W/P750W/P710BT,

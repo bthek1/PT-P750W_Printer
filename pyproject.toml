@@ -20,3 +20,9 @@ build-backend = "hatchling.build"
 dev = [
     "pytest>=9.2.0",
 ]
+
+[tool.pytest.ini_options]
+# The ROS 2 PYTHONPATH injects pytest plugins (launch_testing) that fail to
+# import. Disabling autoload here also covers VS Code test discovery.
+addopts = ["--disable-plugin-autoload"]
+testpaths = ["tests"]
