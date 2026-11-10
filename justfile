@@ -10,7 +10,23 @@ print text *flags:
 test:
     flock -o /tmp/agent-tests.lock uv run pytest -q
 
-# Install pt-print and pt-status on PATH as a uv tool
+# Run the web UI tests (mocked API, no server or printer needed)
+web-test:
+    cd web && flock -o /tmp/agent-tests.lock npm test
+
+# Build the web UI, then serve it and the API on http://127.0.0.1:8750
+serve *flags: web-build
+    uv run pt-server {{flags}}
+
+# Build the web UI into web/dist
+web-build:
+    cd web && npm ci --silent && npm run build
+
+# Vite dev server with hot reload on :5173; run `uv run pt-server` alongside it
+web-dev:
+    cd web && npm run dev
+
+# Install pt-print, pt-status and pt-server on PATH as a uv tool
 install:
     uv tool install --force --reinstall .
 

@@ -42,8 +42,10 @@ Drive a Brother PT-P750W label printer from Linux.
 ## Code
 
 - Python env: `uv` package, src layout (`src/pt_p750w/`), hatchling build.
-  Console scripts `pt-print` and `pt-status` (see `[project.scripts]`). Runtime
-  dependency: Pillow. Dev dependency: pytest.
+  Console scripts `pt-print`, `pt-status` and `pt-server` (see
+  `[project.scripts]`). Runtime dependency: Pillow. Dev dependency: pytest.
+- Library functions raise `PrinterError` (in `status.py`). Only the CLI
+  `main()` functions turn it into `sys.exit`, so the server can reuse them.
 - Tests: `just test`. Hermetic (no printer), under 0.1 s. They check the job
   against the spec's example bytes and the known-good status reply.
   `pyproject.toml` sets `addopts = ["--disable-plugin-autoload"]` (pytest 8.4+):
@@ -67,6 +69,19 @@ Drive a Brother PT-P750W label printer from Linux.
 - `src/pt_p750w/status.py` (`pt-status`): stdlib-only. Finds `/dev/usb/lpN` for `04f9:2062` through
   sysfs, sends invalidate + `ESC @` + `ESC i S`, decodes the 32-byte status
   reply. Run with `just status`.
+- `src/pt_p750w/server.py` (`pt-server`): stdlib `ThreadingHTTPServer` on
+  `127.0.0.1:8750`. `/api/status`, `/api/preview`, `/api/print`, and static
+  files from `web/dist`. One lock guards the USB device. A status request
+  during a print returns the cached state with `busy: true`, because reading
+  mid-job would steal the "printing completed" reply. Each status poll takes
+  about 0.35 s (mostly the 0.2 s drain).
+- `web/`: React 19 + TypeScript + Vite + Tailwind v4, Vitest + Testing
+  Library. `usePrinterStatus` polls every 2 s, pauses while the tab is hidden,
+  and keeps retrying when the server is down. Vite proxies `/api` to
+  `pt-server` in dev. Tests mock `fetch`: `just web-test`. Build: `just
+  web-build`.
+- `render()` accepts newlines (several centred lines). The CLI joins its
+  arguments with spaces, so only the API produces multi-line labels.
 - `udev/99-pt-p750w.rules`: gives group `plugdev` access to the printer (USB and
   usblp nodes). The user is in `plugdev`, not `lp`. Install with
   `just install-udev` (needs the user's sudo password; agents cannot run it).
@@ -75,6 +90,20 @@ Drive a Brother PT-P750W label printer from Linux.
   the first trigger alone leaves it as `root:lp`. Debug with
   `udevadm test /sys/class/usbmisc/lpN 2>&1 | grep 99-pt`.
 - CUPS is active on the dev VM and may briefly re-bind usblp on hotplug.
+- A CUPS queue `PT-P750W` exists on the dev VM. Nobody added it by hand:
+  `system-config-printer-udev` (`udev-configure-printer`) created it when the
+  printer entered printer mode, using the closest installed driver, PT-P710BT
+  from `printer-driver-ptouch` (Foomatic/ptouch-pt, default page `tz-24`).
+  Browsers list it in their print dialogs. CUPS and `pt-print` share the USB
+  device, so do not use both at once.
+- Driver page geometry: portrait, width = tape width, label length runs down
+  the page. `tz-24` is 68 x 284 pt (24 x 100 mm). Custom sizes are
+  `-o PageSize=Custom.<W>x<H>` in points, min 36 pt each.
+- 2026-11-10: a 24 x 60 mm PDF (68 x 170 pt, text rotated 90 degrees, 1 mm
+  border) sent with `lp -d PT-P750W -o PageSize=Custom.68x170` completed in
+  CUPS with no printer error and printed correctly, confirmed by eye. So
+  browser printing (`@page { size: 24mm 60mm }` + `window.print()`, pick the
+  `PT-P750W` queue) is a valid route for web apps, with no backend.
 
 ### Status reply (32 bytes, verified offsets)
 
@@ -110,6 +139,11 @@ Known-good raw reply:
 `just print "TEST"` printed on hardware (2026-11-10): 386 raster lines,
 printer replied phase change, phase change, printing completed. The label
 reads correctly, not mirrored, with the default pin order.
+
+2026-11-10: `POST /api/print` with "UI TEST\nline 2" through `pt-server`
+returned after "printing completed" (281 raster lines). Not yet checked by
+eye. The browser UI was built and served, but not clicked through in a
+browser by an agent.
 
 The printer queues unsolicited replies (phase change etc.). Both scripts call
 `drain()` before sending, or the first read returns a stale message. An earlier

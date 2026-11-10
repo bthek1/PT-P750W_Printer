@@ -39,6 +39,10 @@ COLOURS = {
 }
 
 
+class PrinterError(Exception):
+    """The printer is missing, unreachable or not ready."""
+
+
 def find_device() -> str:
     for node in sorted(glob.glob("/dev/usb/lp*")):
         usb_dev = Path("/sys/class/usbmisc", Path(node).name, "device").resolve().parent
@@ -48,14 +52,16 @@ def find_device() -> str:
             continue
         if ids == (VENDOR, PRODUCT):
             return node
-    sys.exit(f"No PT-P750W ({VENDOR}:{PRODUCT}) found. Is Editor Lite off and the USB port passed through?")
+    raise PrinterError(f"No PT-P750W ({VENDOR}:{PRODUCT}) found. Is Editor Lite off and the USB port passed through?")
 
 
 def open_printer(node: str) -> int:
     try:
         return os.open(node, os.O_RDWR)
     except PermissionError:
-        sys.exit(f"No access to {node}. Run `just install-udev` once.")
+        raise PrinterError(f"No access to {node}. Run `just install-udev` once.")
+    except FileNotFoundError:
+        raise PrinterError(f"{node} disappeared. Is the printer still on?")
 
 
 def read_reply(fd: int, timeout: float = 3.0) -> bytes:
@@ -104,21 +110,37 @@ def named(table: dict[int, str], value: int) -> str:
     return table.get(value, f"unknown (0x{value:02x})")
 
 
-def main() -> None:
-    node = sys.argv[1] if len(sys.argv) > 1 else find_device()
-    status = read_status(node)
+def decode(status: bytes) -> dict:
+    """Decode a 32-byte status reply. Raises PrinterError on a malformed reply."""
     if len(status) != 32 or status[0] != 0x80:
-        sys.exit(f"Bad reply from {node}: {status.hex(' ') or 'nothing'}")
-    errors = bits(status[8], ERRORS_1) + bits(status[9], ERRORS_2)
+        raise PrinterError(f"Bad status reply: {status.hex(' ') or 'nothing'}")
+    return {
+        "model_code": status[4],
+        "status_type": named(STATUS_TYPES, status[18]),
+        "errors": bits(status[8], ERRORS_1) + bits(status[9], ERRORS_2),
+        "tape_mm": status[10],
+        "media": named(MEDIA_TYPES, status[11]),
+        "tape_colour": named(COLOURS, status[24]),
+        "text_colour": named(COLOURS, status[25]),
+        "raw": status.hex(" "),
+    }
+
+
+def main() -> None:
+    try:
+        node = sys.argv[1] if len(sys.argv) > 1 else find_device()
+        info = decode(read_status(node))
+    except PrinterError as e:
+        sys.exit(str(e))
     print(f"device       {node}")
-    print(f"model code   0x{status[4]:02x}")
-    print(f"status       {named(STATUS_TYPES, status[18])}")
-    print(f"errors       {', '.join(errors) or 'none'}")
-    print(f"tape width   {status[10]} mm")
-    print(f"media type   {named(MEDIA_TYPES, status[11])}")
-    print(f"tape colour  {named(COLOURS, status[24])}")
-    print(f"text colour  {named(COLOURS, status[25])}")
-    print(f"raw          {status.hex(' ')}")
+    print(f"model code   0x{info['model_code']:02x}")
+    print(f"status       {info['status_type']}")
+    print(f"errors       {', '.join(info['errors']) or 'none'}")
+    print(f"tape width   {info['tape_mm']} mm")
+    print(f"media type   {info['media']}")
+    print(f"tape colour  {info['tape_colour']}")
+    print(f"text colour  {info['text_colour']}")
+    print(f"raw          {info['raw']}")
 
 
 if __name__ == "__main__":

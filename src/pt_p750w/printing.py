@@ -16,7 +16,9 @@ from pt_p750w.status import (
     INITIALIZE,
     INVALIDATE,
     STATUS_TYPES,
+    PrinterError,
     bits,
+    decode,
     drain,
     find_device,
     named,
@@ -47,12 +49,18 @@ def load_font(font_path: str, size: int) -> ImageFont.FreeTypeFont:
 
 
 def render(text: str, pins: int, font_path: str = DEFAULT_FONT) -> Image.Image:
-    """Render text as a 1-bit image: height = print area pins, width = label length."""
+    """Render text as a 1-bit image: height = print area pins, width = label length.
+
+    Newlines give several centred lines across the tape.
+    """
+    measure = ImageDraw.Draw(Image.new("1", (1, 1)))
     target = int(pins * 0.85)
     size = pins
     while size > 4:
         font = load_font(font_path, size)
-        left, top, right, bottom = font.getbbox(text)
+        options = {"font": font, "spacing": size // 6, "align": "center"}
+        box = measure.multiline_textbbox((0, 0), text, **options)
+        left, top, right, bottom = (round(v) for v in box)
         if bottom - top <= target:
             break
         size -= 1
@@ -60,7 +68,7 @@ def render(text: str, pins: int, font_path: str = DEFAULT_FONT) -> Image.Image:
     width = max(right - left + 2 * pad, MIN_LENGTH_DOTS)
     image = Image.new("1", (width, pins), 1)
     y = (pins - (bottom - top)) // 2 - top
-    ImageDraw.Draw(image).text((pad - left, y), text, font=font, fill=0)
+    ImageDraw.Draw(image).multiline_text((pad - left, y), text, fill=0, **options)
     return image
 
 
@@ -96,15 +104,12 @@ def build_job(lines: list[bytes], tape_mm: int, cut: bool) -> bytes:
 
 
 def check_ready(status: bytes) -> int:
-    if len(status) != 32 or status[0] != 0x80:
-        sys.exit(f"Bad status reply: {status.hex(' ') or 'nothing'}")
-    errors = bits(status[8], ERRORS_1) + bits(status[9], ERRORS_2)
-    if errors:
-        sys.exit(f"Printer not ready: {', '.join(errors)}")
-    tape_mm = status[10]
-    if tape_mm not in PRINT_AREA:
-        sys.exit(f"Unsupported tape width: {tape_mm} mm")
-    return tape_mm
+    info = decode(status)
+    if info["errors"]:
+        raise PrinterError(f"Printer not ready: {', '.join(info['errors'])}")
+    if info["tape_mm"] not in PRINT_AREA:
+        raise PrinterError(f"Unsupported tape width: {info['tape_mm']} mm")
+    return info["tape_mm"]
 
 
 def send(node: str, job: bytes) -> None:
@@ -117,18 +122,33 @@ def send(node: str, job: bytes) -> None:
         for _ in range(6):
             reply = read_reply(fd, timeout=15)
             if len(reply) != 32:
-                sys.exit(f"No completion reply from printer (got {reply.hex(' ') or 'nothing'})")
+                raise PrinterError(f"No completion reply from printer (got {reply.hex(' ') or 'nothing'})")
             kind = reply[18]
             if kind == 0x01:
                 print("printed")
                 return
             if kind == 0x02:
                 errors = bits(reply[8], ERRORS_1) + bits(reply[9], ERRORS_2)
-                sys.exit(f"Print failed: {', '.join(errors) or 'unknown error'}")
+                raise PrinterError(f"Print failed: {', '.join(errors) or 'unknown error'}")
             print(f"printer: {named(STATUS_TYPES, kind)}")
-        sys.exit("Gave up waiting for printing completed")
+        raise PrinterError("Gave up waiting for printing completed")
     finally:
         os.close(fd)
+
+
+def make_job(text: str, tape_mm: int, cut: bool = True, flip: bool = False,
+             font_path: str = DEFAULT_FONT) -> tuple[Image.Image, bytes]:
+    left_pins, pins = PRINT_AREA[tape_mm]
+    image = render(text, pins, font_path)
+    return image, build_job(raster_lines(image, left_pins, flip), tape_mm, cut)
+
+
+def print_text(text: str, cut: bool = True) -> int:
+    """Check the printer, then print one label. Returns the raster line count."""
+    node = find_device()
+    image, job = make_job(text, check_ready(read_status(node)), cut)
+    send(node, job)
+    return image.width
 
 
 def main() -> None:
@@ -141,15 +161,16 @@ def main() -> None:
     parser.add_argument("--dry-run", metavar="PREFIX", help="write PREFIX.png and PREFIX.bin instead of printing")
     args = parser.parse_args()
 
-    if args.dry_run and args.tape:
-        node, tape_mm = None, args.tape
-    else:
-        node = find_device()
-        tape_mm = check_ready(read_status(node))
+    try:
+        if args.dry_run and args.tape:
+            node, tape_mm = None, args.tape
+        else:
+            node = find_device()
+            tape_mm = check_ready(read_status(node))
+    except PrinterError as e:
+        sys.exit(str(e))
 
-    left_pins, pins = PRINT_AREA[tape_mm]
-    image = render(" ".join(args.text), pins, args.font)
-    job = build_job(raster_lines(image, left_pins, args.flip), tape_mm, not args.no_cut)
+    image, job = make_job(" ".join(args.text), tape_mm, not args.no_cut, args.flip, args.font)
     length_mm = image.width / 180 * 25.4
     print(f"tape {tape_mm} mm, {image.width} raster lines ({length_mm:.1f} mm + margins), job {len(job)} bytes")
 
@@ -158,7 +179,10 @@ def main() -> None:
         Path(f"{args.dry_run}.bin").write_bytes(job)
         print(f"wrote {args.dry_run}.png and {args.dry_run}.bin")
         return
-    send(node, job)
+    try:
+        send(node, job)
+    except PrinterError as e:
+        sys.exit(str(e))
 
 
 if __name__ == "__main__":

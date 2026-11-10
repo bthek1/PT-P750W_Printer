@@ -10,6 +10,7 @@ from pt_p750w.printing import (
     raster_lines,
     render,
 )
+from pt_p750w.status import PrinterError
 
 # Status reply captured from the real printer: 24 mm laminated, black on white.
 GOOD_STATUS = bytes.fromhex(
@@ -87,10 +88,18 @@ def test_check_ready_accepts_good_status():
 def test_check_ready_rejects_error():
     replace_media = bytearray(GOOD_STATUS)
     replace_media[9] = 0x01
-    with pytest.raises(SystemExit, match="replace media"):
+    with pytest.raises(PrinterError, match="replace media"):
         check_ready(bytes(replace_media))
 
 
 def test_check_ready_rejects_garbage():
-    with pytest.raises(SystemExit, match="Bad status"):
+    with pytest.raises(PrinterError, match="Bad status"):
         check_ready(b"")
+
+
+def test_multiline_text_fits_print_area():
+    one = render("Hello", 128)
+    two = render("Hello\nWorld", 128)
+    assert two.height == 128 and two.getextrema()[0] == 0
+    # Two lines share the height, so each line is smaller and the label shorter.
+    assert two.width < one.width
