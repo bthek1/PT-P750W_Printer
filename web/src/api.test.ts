@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { fetchStatus, previewUrl, printLabel } from './api'
+import { DEFAULT_STYLE, fetchStatus, previewUrl, printLabel } from './api'
 
 afterEach(() => vi.unstubAllGlobals())
 
@@ -13,6 +13,14 @@ describe('api', () => {
     expect(url.pathname).toBe('/api/preview')
     expect(url.searchParams.get('text')).toBe('A & B\nC')
     expect(url.searchParams.get('tape')).toBe('12')
+    expect(JSON.parse(url.searchParams.get('style')!)).toEqual(DEFAULT_STYLE)
+  })
+
+  it('sends the style with the print request', async () => {
+    respond(JSON.stringify({ ok: true, raster_lines: 1, length_mm: 1 }))
+    await printLabel('Hi', false, { ...DEFAULT_STYLE, italic: true })
+    const [, init] = vi.mocked(fetch).mock.calls[0] as unknown as [string, RequestInit]
+    expect(JSON.parse(init.body as string)).toEqual({ text: 'Hi', cut: false, style: { ...DEFAULT_STYLE, italic: true } })
   })
 
   it('fails the status call on an HTTP error', async () => {

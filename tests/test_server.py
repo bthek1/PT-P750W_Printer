@@ -3,6 +3,7 @@ import json
 import sys
 import threading
 import urllib.error
+import urllib.parse
 import urllib.request
 
 import pytest
@@ -10,7 +11,7 @@ from PIL import Image
 
 from conftest import GOOD_STATUS
 from pt_p750w import server
-from pt_p750w.printing import PRINT_AREA
+from pt_p750w.printing import PRINT_AREA, Style
 from pt_p750w.status import PrinterError
 
 
@@ -20,7 +21,7 @@ def api(tmp_path, monkeypatch):
     printed = []
     monkeypatch.setattr(server, "find_device", lambda: "/dev/usb/lp9")
     monkeypatch.setattr(server, "read_status", lambda node: GOOD_STATUS)
-    monkeypatch.setattr(server, "print_text", lambda text, cut: printed.append((text, cut)) or 386)
+    monkeypatch.setattr(server, "print_text", lambda text, cut, style: printed.append((text, cut, style)) or 386)
     (tmp_path / "index.html").write_text("<h1>ui</h1>")
     httpd = server.make_server("127.0.0.1", 0, tmp_path)
     # A short poll interval keeps shutdown() fast; the default 0.5 s adds up per test.
@@ -69,7 +70,7 @@ def test_print_sends_text(api):
     code, _, body = call(f"{base}/api/print", {"text": "Hello\nWorld", "cut": False})
     assert code == 200
     assert json.loads(body)["raster_lines"] == 386
-    assert printed == [("Hello\nWorld", False)]
+    assert printed == [("Hello\nWorld", False, Style())]
 
 
 @pytest.mark.parametrize("body", [{"text": ""}, {"text": "   "}, {"text": "x" * 201}, {"text": 5}, ["x"]])
@@ -82,7 +83,7 @@ def test_print_rejects_bad_text(api, body):
 def test_print_reports_printer_error(api, monkeypatch):
     base, _ = api
 
-    def fail(text, cut):
+    def fail(text, cut, style):
         raise PrinterError("Printer not ready: cover open")
 
     monkeypatch.setattr(server, "print_text", fail)
@@ -182,3 +183,33 @@ def test_main_warns_without_web_ui_and_stops_on_ctrl_c(monkeypatch, tmp_path, ca
     server.main()
     out = capsys.readouterr().out
     assert "no web UI" in out and "serving on http://127.0.0.1:8750" in out
+
+
+def test_print_passes_style(api):
+    base, printed = api
+    code, _, _ = call(f"{base}/api/print", {"text": "Hi", "style": {"align": "left", "underline": True}})
+    assert code == 200
+    assert printed[0][2] == Style(align="left", underline=True)
+
+
+@pytest.mark.parametrize("style", [{"align": "middle"}, {"bold": "yes"}, {"colour": "red"}, ["bold"]])
+def test_print_rejects_bad_style(api, style):
+    base, printed = api
+    code, _, body = call(f"{base}/api/print", {"text": "Hi", "style": style})
+    assert code == 400 and (b"style" in body or b"must be" in body)
+    assert printed == []
+
+
+def test_preview_applies_style(api):
+    base, _ = api
+    query = urllib.parse.urlencode({"text": "Hi", "tape": 12, "style": json.dumps({"invert": True})})
+    image = Image.open(io.BytesIO(call(f"{base}/api/preview?{query}")[2]))
+    # Inverted: the background is black, so most pixels are dark.
+    assert image.getpixel((0, 0)) == 0
+
+
+@pytest.mark.parametrize("style", ["{nope", '{"size_pt": 500}'])
+def test_preview_rejects_bad_style(api, style):
+    base, _ = api
+    query = urllib.parse.urlencode({"text": "Hi", "style": style})
+    assert call(f"{base}/api/preview?{query}")[0] == 400

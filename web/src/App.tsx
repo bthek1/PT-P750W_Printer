@@ -7,12 +7,15 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Checkbox } from '@/components/ui/checkbox'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
-import { previewUrl, printLabel } from './api'
+import { DEFAULT_STYLE, previewUrl, printLabel, toggleFlag, type Flag, type LabelStyle } from './api'
+import { FormatToolbar } from './FormatToolbar'
 import { usePrinterStatus, type Connection } from './usePrinterStatus'
 
 const DEFAULT_TAPE_MM = 24
 const MAX_TEXT = 200
 const DOTS_PER_MM = 180 / 25.4
+// Browsers keep Ctrl+L/E/R (address bar, search, reload), so only these are bound.
+const SHORTCUTS: Record<string, Flag> = { b: 'bold', i: 'italic', u: 'underline' }
 
 type Tone = 'ready' | 'busy' | 'waiting' | 'error'
 type StatusBadge = { label: string; detail?: string; tone: Tone }
@@ -54,6 +57,7 @@ export default function App() {
   const [connection, refresh] = usePrinterStatus()
   const [text, setText] = useState('')
   const [cut, setCut] = useState(true)
+  const [style, setStyle] = useState<LabelStyle>(DEFAULT_STYLE)
   const [job, setJob] = useState<PrintState>({ state: 'idle' })
   const [previewWidth, setPreviewWidth] = useState<number | null>(null)
 
@@ -61,14 +65,14 @@ export default function App() {
   const info = data?.status ?? null
   const tapeMm = info?.tape_mm ?? DEFAULT_TAPE_MM
   const badge = badgeFor(connection)
-  const previewText = useDebounced(text.trim() ? text : '', 300)
+  const preview = useDebounced(text.trim() ? previewUrl(text, tapeMm, style) : '', 300)
   const canPrint = badge.tone === 'ready' && text.trim() !== '' && job.state !== 'printing'
 
   async function print() {
     if (!canPrint) return
     setJob({ state: 'printing' })
     try {
-      const result = await printLabel(text, cut)
+      const result = await printLabel(text, cut, style)
       setJob({ state: 'done', lengthMm: result.length_mm })
     } catch (error) {
       setJob({ state: 'failed', error: error instanceof Error ? error.message : String(error) })
@@ -77,9 +81,14 @@ export default function App() {
   }
 
   function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
-    if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+    if (!(event.ctrlKey || event.metaKey)) return
+    const flag = SHORTCUTS[event.key.toLowerCase()]
+    if (event.key === 'Enter') {
       event.preventDefault()
       print()
+    } else if (flag && !event.shiftKey && !event.altKey) {
+      event.preventDefault()
+      setStyle((current) => toggleFlag(current, flag))
     }
   }
 
@@ -121,7 +130,10 @@ export default function App() {
         <Card>
           <CardHeader>
             <CardTitle>New label</CardTitle>
-            <CardDescription>A new line prints as a second line on the tape. Ctrl+Enter prints.</CardDescription>
+            <CardDescription>
+              A new line prints as a second line on the tape. Formatting applies to the whole label. Ctrl+Enter
+              prints.
+            </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
             <div className="flex flex-col gap-2">
@@ -139,12 +151,14 @@ export default function App() {
               />
             </div>
 
+            <FormatToolbar style={style} onChange={setStyle} />
+
             <div className="flex flex-col gap-2">
               <Label>Preview</Label>
               <div className="overflow-x-auto rounded-md border border-dashed bg-white p-3">
-                {previewText ? (
+                {preview ? (
                   <img
-                    src={previewUrl(previewText, tapeMm)}
+                    src={preview}
                     alt="Label preview"
                     className="h-16 max-w-none [image-rendering:pixelated]"
                     onLoad={(event) => setPreviewWidth(event.currentTarget.naturalWidth)}
@@ -153,7 +167,7 @@ export default function App() {
                   <p className="py-5 text-center text-sm text-neutral-400">Preview appears here</p>
                 )}
               </div>
-              {previewText && previewWidth && (
+              {preview && previewWidth && (
                 <p className="text-xs text-muted-foreground">
                   About {(previewWidth / DOTS_PER_MM).toFixed(0)} mm of text on {tapeMm} mm tape, plus feed margins.
                 </p>

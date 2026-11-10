@@ -92,6 +92,12 @@ Preview a label without printing (writes `label.png` and `label.bin`):
 uv run pt-print Hello --tape 24 --dry-run label
 ```
 
+Format the label with `--style` (JSON, same fields as the web UI and API):
+
+```sh
+uv run pt-print Hello --style '{"font": "serif", "underline": true, "border": true}'
+```
+
 `print` reads the status first and refuses to print if the printer reports an
 error.
 
@@ -110,6 +116,22 @@ or printer comes back. It shows a preview of the label at the loaded tape
 width. A new line in the text prints as a second line on the tape. Ctrl+Enter
 prints.
 
+The toolbar formats the whole label (the printer prints one colour, so
+per-character options such as colour, highlight or subscript do not apply):
+
+| Option | Values | Shortcut |
+|---|---|---|
+| Font (`font`) | `sans`, `condensed`, `serif`, `mono` (DejaVu) | |
+| Size (`size_pt`) | `null` = fit the tape, or 4 to 72 pt as a maximum | |
+| `bold`, `italic`, `underline`, `strike` | true / false | Ctrl+B, Ctrl+I, Ctrl+U |
+| Case (`case`) | `none`, `upper`, `lower`, `title` | |
+| Alignment (`align`) | `left`, `center`, `right` | |
+| `line_spacing` | 1.0, 1.5, 2.0 | |
+| `outline`, `invert` (white on black), `border` | true / false | |
+
+Text always shrinks to fit the tape, so a fixed size is an upper limit.
+"Clear formatting" restores the defaults (bold sans, centred, auto size).
+
 `pt-server` binds to `127.0.0.1` by default. `just serve --host 0.0.0.0`
 opens it to the LAN. There is no authentication, so anyone who can reach the
 port can print.
@@ -120,8 +142,8 @@ Vite (port 5173) forwards `/api` to the server.
 | Endpoint | Purpose |
 |---|---|
 | `GET /api/status` | Live status as JSON (`connected`, `busy`, `error`, `status`) |
-| `GET /api/preview?text=...&tape=24` | PNG of the label |
-| `POST /api/print` | `{"text": "...", "cut": true}`; returns 409 with `error` if the printer is not ready |
+| `GET /api/preview?text=...&tape=24&style={...}` | PNG of the label; `tape` and `style` are optional |
+| `POST /api/print` | `{"text": "...", "cut": true, "style": {...}}`; returns 400 for a bad style, 409 with `error` if the printer is not ready |
 
 Do not run `pt-print` while `pt-server` is printing.
 

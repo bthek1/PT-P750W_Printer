@@ -10,6 +10,8 @@ from pt_p750w.printing import (
     HEAD_PINS,
     MIN_LENGTH_DOTS,
     PRINT_AREA,
+    Style,
+    apply_case,
     build_job,
     check_ready,
     make_job,
@@ -191,4 +193,115 @@ def test_main_exits_with_message_when_print_fails(stub_device, monkeypatch):
     monkeypatch.setattr(printing, "send", jam)
     monkeypatch.setattr(sys, "argv", ["pt-print", "Hi"])
     with pytest.raises(SystemExit, match="cutter jam"):
+        printing.main()
+
+
+def ink_rows(image):
+    """Indices of rows that contain at least one black pixel."""
+    return [y for y in range(image.height) if any(image.getpixel((x, y)) == 0 for x in range(image.width))]
+
+
+def test_default_style_is_bold_sans_centred():
+    assert Style().font_file().endswith("/DejaVuSans-Bold.ttf")
+    assert Style(font="serif", bold=False, italic=True).font_file().endswith("/DejaVuSerif-Italic.ttf")
+
+
+@pytest.mark.parametrize("data, message", [
+    ("x", "JSON object"),
+    ({"shadow": True}, "unknown style option: shadow"),
+    ({"italic": 1}, "italic must be true or false"),
+    ({"font": "comic"}, "font must be one of"),
+    ({"align": "justify"}, "align must be one of"),
+    ({"case": "toggle"}, "case must be one of"),
+    ({"line_spacing": 3}, "line_spacing must be one of"),
+    ({"size_pt": 2}, "size_pt must be"),
+    ({"size_pt": 12.5}, "size_pt must be"),
+    ({"size_pt": True}, "size_pt must be"),
+])
+def test_style_rejects_bad_input(data, message):
+    with pytest.raises(ValueError, match=message):
+        Style.from_dict(data)
+
+
+def test_style_accepts_full_input():
+    data = {"font": "mono", "bold": False, "italic": True, "underline": True, "strike": True, "outline": True,
+            "invert": True, "border": True, "align": "right", "case": "upper", "size_pt": 12, "line_spacing": 1.5}
+    assert Style.from_dict(data) == Style(**data)
+    assert Style.from_dict(None) == Style()
+
+
+@pytest.mark.parametrize("case, expected", [
+    ("none", "don't stop\nme"), ("upper", "DON'T STOP\nME"), ("lower", "don't stop\nme"),
+    ("title", "Don't Stop\nMe"),
+])
+def test_apply_case(case, expected):
+    assert apply_case("don't stop\nme", case) == expected
+
+
+@pytest.mark.parametrize("style", [
+    Style(underline=True), Style(strike=True), Style(outline=True), Style(border=True), Style(invert=True),
+    Style(italic=True, font="serif"), Style(line_spacing=2.0), Style(align="left"), Style(align="right"),
+])
+@pytest.mark.parametrize("tape_mm", [4, 24])
+def test_every_style_fits_print_area(style, tape_mm):
+    _, pins = PRINT_AREA[tape_mm]
+    image = render("Hello\nWorld", pins, style)
+    assert image.height == pins and image.width >= MIN_LENGTH_DOTS
+    assert image.getextrema() == (0, 1)
+
+
+def test_styles_change_the_image():
+    plain = render("Hello", 128).tobytes()
+    for style in (Style(underline=True), Style(strike=True), Style(outline=True), Style(border=True),
+                  Style(bold=False), Style(font="mono")):
+        assert render("Hello", 128, style).tobytes() != plain, style
+
+
+def test_invert_swaps_background():
+    assert render("Hi", 128).getpixel((0, 0)) == 1
+    assert render("Hi", 128, Style(invert=True)).getpixel((0, 0)) == 0
+
+
+def test_border_draws_frame_inside_edge():
+    image = render("Hi", 128, Style(border=True))
+    frame = 128 // 24
+    assert image.getpixel((0, 0)) == 1
+    assert image.getpixel((frame, 64)) == 0 and image.getpixel((image.width - 1 - frame, 64)) == 0
+
+
+def test_size_pt_caps_text_height():
+    small = render("Hello", 128, Style(size_pt=8))
+    rows = ink_rows(small)
+    assert rows[-1] - rows[0] < 8 * 2.5
+    # A size larger than the tape still shrinks to fit.
+    assert render("Hello", 128, Style(size_pt=72)).tobytes() == render("Hello", 128).tobytes()
+
+
+def test_alignment_moves_short_line():
+    def first_ink_column(image, rows):
+        return min(x for x in range(image.width) for y in rows if image.getpixel((x, y)) == 0)
+
+    bottom_half = range(70, 128)
+    left = first_ink_column(render("Wide line\nab", 128, Style(align="left")), bottom_half)
+    centre = first_ink_column(render("Wide line\nab", 128), bottom_half)
+    right = first_ink_column(render("Wide line\nab", 128, Style(align="right")), bottom_half)
+    assert left < centre < right
+
+
+def test_blank_line_keeps_its_space():
+    # Three lines must share the height, so the text is smaller than with two.
+    assert render("A\n\nB", 128).width < render("A\nB", 128).width
+
+
+def test_main_applies_style_json(tmp_path, monkeypatch):
+    prefix = tmp_path / "label"
+    style = '{"invert": true}'
+    monkeypatch.setattr(sys, "argv", ["pt-print", "Hi", "--tape", "12", "--style", style, "--dry-run", str(prefix)])
+    printing.main()
+    assert Image.open(f"{prefix}.png").getpixel((0, 0)) == 0
+
+
+def test_main_rejects_bad_style_json(monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["pt-print", "Hi", "--style", '{"align": 1}'])
+    with pytest.raises(SystemExit, match="Bad --style: align must be one of"):
         printing.main()

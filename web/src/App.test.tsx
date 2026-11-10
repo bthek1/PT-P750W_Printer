@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
-import type { StatusResponse } from './api'
+import { DEFAULT_STYLE, type StatusResponse } from './api'
 
 const READY: StatusResponse = {
   connected: true,
@@ -77,7 +77,7 @@ describe('App', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Print' }))
     expect(await screen.findByText(/Printed/)).toBeInTheDocument()
     const call = fetchMock.mock.calls.find(([url]) => url === '/api/print') as unknown as [string, RequestInit]
-    expect(JSON.parse(call[1].body as string)).toEqual({ text: 'Hello\nWorld', cut: true })
+    expect(JSON.parse(call[1].body as string)).toEqual({ text: 'Hello\nWorld', cut: true, style: DEFAULT_STYLE })
   })
 
   it('shows the server error when printing fails', async () => {
@@ -121,7 +121,7 @@ describe('App', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Print' }))
     await screen.findByText(/Printed/)
     const call = fetchMock.mock.calls.find(([url]) => url === '/api/print') as unknown as [string, RequestInit]
-    expect(JSON.parse(call[1].body as string)).toEqual({ text: 'Hi', cut: false })
+    expect(JSON.parse(call[1].body as string)).toEqual({ text: 'Hi', cut: false, style: DEFAULT_STYLE })
   })
 
   it('disables Print for blank text', async () => {
@@ -153,5 +153,75 @@ describe('App', () => {
     finish(new Response(JSON.stringify({ ok: true, raster_lines: 1, length_mm: 0.1 })))
     await screen.findByText(/Printed/)
     expect(fetchMock.mock.calls.filter(([url]) => url === '/api/print')).toHaveLength(1)
+  })
+
+  it('sends the chosen formatting with preview and print', async () => {
+    const fetchMock = mockServer(READY)
+    render(<App />)
+    await screen.findByText('Ready')
+    fireEvent.change(screen.getByLabelText(/Label text/), { target: { value: 'Hi' } })
+    fireEvent.change(screen.getByLabelText('Font'), { target: { value: 'serif' } })
+    fireEvent.change(screen.getByLabelText('Font size'), { target: { value: '12' } })
+    fireEvent.change(screen.getByLabelText('Case'), { target: { value: 'upper' } })
+    fireEvent.change(screen.getByLabelText('Line spacing'), { target: { value: '1.5' } })
+    fireEvent.click(screen.getByRole('radio', { name: 'Align left' }))
+    fireEvent.click(screen.getByRole('button', { name: /Italic/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Bold/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'White on black' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Border' }))
+    const expected = {
+      ...DEFAULT_STYLE,
+      font: 'serif',
+      size_pt: 12,
+      case: 'upper',
+      line_spacing: 1.5,
+      align: 'left',
+      italic: true,
+      bold: false,
+      invert: true,
+      border: true,
+    }
+    await waitFor(() => {
+      const src = screen.getByAltText('Label preview').getAttribute('src')!
+      expect(JSON.parse(new URL(src, 'http://x').searchParams.get('style')!)).toEqual(expected)
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Print' }))
+    await screen.findByText(/Printed/)
+    const call = fetchMock.mock.calls.find(([url]) => url === '/api/print') as unknown as [string, RequestInit]
+    expect(JSON.parse(call[1].body as string).style).toEqual(expected)
+  })
+
+  it('toggles bold, italic and underline with Ctrl shortcuts', async () => {
+    mockServer(READY)
+    render(<App />)
+    await screen.findByText('Ready')
+    const editor = screen.getByLabelText(/Label text/)
+    fireEvent.keyDown(editor, { key: 'b', ctrlKey: true })
+    fireEvent.keyDown(editor, { key: 'I', ctrlKey: true })
+    fireEvent.keyDown(editor, { key: 'u', metaKey: true })
+    fireEvent.keyDown(editor, { key: 'u', ctrlKey: true, shiftKey: true })
+    fireEvent.keyDown(editor, { key: 'x', ctrlKey: true })
+    fireEvent.keyDown(editor, { key: 'b' })
+    expect(screen.getByRole('button', { name: /Bold/ })).toHaveAttribute('aria-pressed', 'false')
+    expect(screen.getByRole('button', { name: /Italic/ })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('button', { name: /Underline/ })).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  it('clears formatting back to the defaults', async () => {
+    mockServer(READY)
+    render(<App />)
+    await screen.findByText('Ready')
+    const clear = screen.getByRole('button', { name: 'Clear formatting' })
+    expect(clear).toBeDisabled()
+    fireEvent.click(screen.getByRole('button', { name: 'Outline' }))
+    fireEvent.change(screen.getByLabelText('Font size'), { target: { value: '24' } })
+    fireEvent.change(screen.getByLabelText('Font size'), { target: { value: '' } })
+    fireEvent.click(screen.getByRole('radio', { name: 'Align left' }))
+    fireEvent.click(screen.getByRole('radio', { name: 'Align left' }))
+    expect(screen.getByRole('radio', { name: 'Align left' })).toHaveAttribute('aria-checked', 'true')
+    fireEvent.click(clear)
+    expect(screen.getByRole('button', { name: 'Outline' })).toHaveAttribute('aria-pressed', 'false')
+    expect(screen.getByRole('radio', { name: 'Centre' })).toHaveAttribute('aria-checked', 'true')
+    expect(clear).toBeDisabled()
   })
 })

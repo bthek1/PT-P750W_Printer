@@ -1,8 +1,9 @@
 """HTTP API and web UI host for the PT-P750W.
 
 GET  /api/status            live status, re-read from the printer on each call
-GET  /api/preview?text=...  PNG of the label as it would print on the loaded tape
-POST /api/print             {"text": "...", "cut": true}
+GET  /api/preview?text=...  PNG of the label as it would print on the loaded tape.
+                            Optional tape=<mm> and style=<JSON, see printing.Style>.
+POST /api/print             {"text": "...", "cut": true, "style": {...}}
 Anything else is served from the built web UI directory.
 """
 import argparse
@@ -17,7 +18,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from pt_p750w.printing import PRINT_AREA, make_job, print_text
+from pt_p750w.printing import PRINT_AREA, Style, make_job, print_text
 from pt_p750w.status import PrinterError, decode, find_device, read_status
 
 MAX_TEXT = 200
@@ -57,11 +58,11 @@ class Printer:
         status = self.last.get("status") or {}
         return status.get("tape_mm") if status.get("tape_mm") in PRINT_AREA else DEFAULT_TAPE_MM
 
-    def print(self, text: str, cut: bool) -> int:
+    def print(self, text: str, cut: bool, style: Style) -> int:
         if not self.lock.acquire(timeout=30):
             raise PrinterError("Printer is busy with another job")
         try:
-            return print_text(text, cut)
+            return print_text(text, cut, style)
         finally:
             self.lock.release()
 
@@ -87,11 +88,12 @@ class Handler(SimpleHTTPRequestHandler):
         try:
             body = self.read_json()
             text = clean_text(body.get("text"))
+            style = Style.from_dict(body.get("style"))
         except ValueError as e:
             self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(e)})
             return
         try:
-            lines = self.printer.print(text, bool(body.get("cut", True)))
+            lines = self.printer.print(text, bool(body.get("cut", True)), style)
         except PrinterError as e:
             self.send_json(HTTPStatus.CONFLICT, {"error": str(e)})
             return
@@ -103,10 +105,11 @@ class Handler(SimpleHTTPRequestHandler):
             tape = int(query.get("tape", [self.printer.tape_mm()])[0])
             if tape not in PRINT_AREA:
                 raise ValueError(f"tape must be one of {sorted(PRINT_AREA)}")
+            style = Style.from_dict(json.loads(query.get("style", ["{}"])[0]))
         except ValueError as e:
             self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(e)})
             return
-        image, _ = make_job(text, tape)
+        image, _ = make_job(text, tape, style=style)
         png = io.BytesIO()
         image.convert("L").save(png, "PNG")
         self.send_bytes(HTTPStatus.OK, "image/png", png.getvalue())

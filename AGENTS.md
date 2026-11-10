@@ -46,7 +46,7 @@ Drive a Brother PT-P750W label printer from Linux.
   `[project.scripts]`). Runtime dependency: Pillow. Dev dependency: pytest.
 - Library functions raise `PrinterError` (in `status.py`). Only the CLI
   `main()` functions turn it into `sys.exit`, so the server can reuse them.
-- Tests: `just test`. Hermetic (no printer): 66 tests in about 0.2 s. They
+- Tests: `just test`. Hermetic (no printer): 116 tests in about 0.5 s. They
   check the job against the spec's example bytes and the known-good status
   reply. `tests/conftest.py` has `fake_printer`: a socketpair that plays the
   printer, so the real `read_reply`/`drain`/`send` code runs without USB. Its
@@ -64,7 +64,7 @@ Drive a Brother PT-P750W label printer from Linux.
 - Spec: Brother "Raster Command Reference" for PT-E550W/P750W/P710BT,
   `https://download.brother.com/welcome/docp100064/cv_pte550wp750wp710bt_eng_raster_102.pdf`.
   Not stored in the repo. Extract with `pdftotext -layout`. Use it, not memory.
-- `src/pt_p750w/printing.py` (`pt-print`): renders text with Pillow (DejaVu Sans Bold) to a 1-bit image,
+- `src/pt_p750w/printing.py` (`pt-print`): renders text with Pillow to a 1-bit image,
   one raster line per column, and sends: invalidate, `ESC @`, `ESC i a 01`,
   `ESC i z`, `ESC i M 40` (auto cut), `ESC i A 01`, `ESC i K 08` (no chain),
   `ESC i d 0E 00` (2 mm feed), `M 00` (no compression), `G 10 00` + 16 bytes per
@@ -94,10 +94,21 @@ Drive a Brother PT-P750W label printer from Linux.
   `pt-server` in dev. Tests mock `fetch`: `just web-test`. Vitest runs
   without `globals`, so Testing Library does not unmount between tests: each
   test file must call `cleanup()` in `afterEach`, or old components keep
-  polling the next test's mock. Build: `just
+  polling the next test's mock. In VS Code the web tests need the Vitest
+  extension (`vitest.explorer`, recommended in `.vscode/extensions.json`). It
+  finds `web/vite.config.ts` on its own. Build: `just
   web-build`.
-- `render()` accepts newlines (several centred lines). The CLI joins its
+- `render()` accepts newlines (several lines). The CLI joins its
   arguments with spaces, so only the API produces multi-line labels.
+- Formatting is one `printing.Style` per label (font family, bold, italic,
+  underline, strike, outline, invert, border, align, case, max `size_pt`,
+  line spacing). Defaults reproduce the original look: DejaVu Sans Bold,
+  centred, fit to tape. `Style.from_dict` validates API and `--style` JSON
+  and raises `ValueError` (400 in the server). The UI mirrors it as
+  `LabelStyle` in `web/src/api.ts` and the toolbar in `FormatToolbar.tsx`;
+  change both sides together. Per-character formatting (subscript, colour,
+  highlight, small caps) is out of scope: one-colour printer, one image per
+  label. Ctrl+L/E/R are not bound because browsers keep them.
 - `udev/99-pt-p750w.rules`: gives group `plugdev` access to the printer (USB and
   usblp nodes). The user is in `plugdev`, not `lp`. Install with
   `just install-udev` (needs the user's sudo password; agents cannot run it).
