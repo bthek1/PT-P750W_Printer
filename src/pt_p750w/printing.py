@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Print a text label on a Brother PT-P750W over /dev/usb/lpN.
 
 Protocol: Brother "Raster Command Reference" for PT-E550W/P750W/P710BT,
@@ -11,7 +10,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
-from pt_status import (
+from pt_p750w.status import (
     ERRORS_1,
     ERRORS_2,
     INITIALIZE,
@@ -40,12 +39,19 @@ AUTO_CUT = 0x40
 NO_CHAIN_PRINTING = 0x08
 
 
-def render(text: str, pins: int, font_path: str) -> Image.Image:
+def load_font(font_path: str, size: int) -> ImageFont.FreeTypeFont:
+    if Path(font_path).is_file():
+        return ImageFont.truetype(font_path, size)
+    # Pillow's bundled font, so the package still works without DejaVu installed.
+    return ImageFont.load_default(size)
+
+
+def render(text: str, pins: int, font_path: str = DEFAULT_FONT) -> Image.Image:
     """Render text as a 1-bit image: height = print area pins, width = label length."""
     target = int(pins * 0.85)
     size = pins
     while size > 4:
-        font = ImageFont.truetype(font_path, size)
+        font = load_font(font_path, size)
         left, top, right, bottom = font.getbbox(text)
         if bottom - top <= target:
             break
@@ -127,7 +133,7 @@ def send(node: str, job: bytes) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("text")
+    parser.add_argument("text", nargs="+", help="label text; several words are joined with spaces")
     parser.add_argument("--font", default=DEFAULT_FONT)
     parser.add_argument("--tape", type=int, help="tape width in mm; skips the printer query (dry run only)")
     parser.add_argument("--no-cut", action="store_true")
@@ -142,7 +148,7 @@ def main() -> None:
         tape_mm = check_ready(read_status(node))
 
     left_pins, pins = PRINT_AREA[tape_mm]
-    image = render(args.text, pins, args.font)
+    image = render(" ".join(args.text), pins, args.font)
     job = build_job(raster_lines(image, left_pins, args.flip), tape_mm, not args.no_cut)
     length_mm = image.width / 180 * 25.4
     print(f"tape {tape_mm} mm, {image.width} raster lines ({length_mm:.1f} mm + margins), job {len(job)} bytes")

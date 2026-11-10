@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Read live status from a Brother PT-P750W over /dev/usb/lpN.
 
 Protocol: Brother "Raster Command Reference" for PT-E550W/P750W/P710BT.

@@ -44,13 +44,25 @@ Hold the Editor Lite button until the LED goes off before printing.
 
 ## Python environment
 
-The project uses `uv`. Create the virtual environment once:
+The project is a `uv` package with two commands, `pt-print` and `pt-status`.
+Create the virtual environment once:
 
 ```sh
 uv sync
 ```
 
-`just` recipes run the scripts through `uv run`.
+Run the commands with `uv run`, or through the `just` recipes:
+
+```sh
+uv run pt-print Hello world
+uv run pt-status
+```
+
+To put the commands on your `PATH` for use from any directory:
+
+```sh
+just install    # uv tool install
+```
 
 ## Permissions
 
@@ -66,8 +78,15 @@ just install-udev
 ```sh
 just status                  # tape width, media type, colours, errors
 just print "Hello"           # print a text label on the loaded tape
-just print "Hello" --flip    # if the text comes out mirrored
+just print "Hello" --flip    # reverse pin order (not needed normally)
 just print "Hello" --no-cut
+just test                    # hermetic tests, no printer needed
+```
+
+Preview a label without printing (writes `label.png` and `label.bin`):
+
+```sh
+uv run pt-print Hello --tape 24 --dry-run label
 ```
 
 `print` reads the status first and refuses to print if the printer reports an
@@ -77,10 +96,11 @@ error.
 
 | Path | Purpose |
 |---|---|
-| `pt_status.py` | Reads and decodes live printer status over USB |
-| `pt_print.py` | Renders text and prints it as a label |
+| `src/pt_p750w/status.py` | `pt-status`: reads and decodes live printer status over USB |
+| `src/pt_p750w/printing.py` | `pt-print`: renders text and prints it as a label |
+| `tests/` | Hermetic tests for the print job and status decoding |
 | `udev/99-pt-p750w.rules` | Lets the `plugdev` group use the printer |
-| `justfile` | `status`, `print` and `install-udev` recipes |
+| `justfile` | `status`, `print`, `test`, `install` and `install-udev` recipes |
 | `AGENTS.md` | Notes and rules for AI agents |
 
 ## Troubleshooting
@@ -95,4 +115,5 @@ error.
 ## Status
 
 USB forwarding and live status work (verified on 24 mm laminated tape).
-Printing works (first label printed on 24 mm tape).
+Status and printing work. Verified on 24 mm laminated tape: the label prints,
+cuts and reads correctly.

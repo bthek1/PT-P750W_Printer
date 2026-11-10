@@ -41,19 +41,29 @@ Drive a Brother PT-P750W label printer from Linux.
 
 ## Code
 
-- Python env: `uv` project (`pyproject.toml`, `uv.lock`, `.venv/`). Run
-  scripts with `uv run`. Only dependency: Pillow (text rendering).
+- Python env: `uv` package, src layout (`src/pt_p750w/`), hatchling build.
+  Console scripts `pt-print` and `pt-status` (see `[project.scripts]`). Runtime
+  dependency: Pillow. Dev dependency: pytest.
+- Tests: `just test`. Hermetic (no printer), under 0.1 s. They check the job
+  against the spec's example bytes and the known-good status reply. pytest
+  needs `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`: the user's ROS 2 `PYTHONPATH` injects
+  `launch_testing` plugins that fail to import.
+- To test the installed package: `uv build --wheel -o <dir>`, then
+  `env -u PYTHONPATH uv run --isolated --no-project --with <wheel> pt-status`.
 - Spec: Brother "Raster Command Reference" for PT-E550W/P750W/P710BT,
   `https://download.brother.com/welcome/docp100064/cv_pte550wp750wp710bt_eng_raster_102.pdf`.
   Not stored in the repo. Extract with `pdftotext -layout`. Use it, not memory.
-- `pt_print.py`: renders text with Pillow (DejaVu Sans Bold) to a 1-bit image,
+- `src/pt_p750w/printing.py` (`pt-print`): renders text with Pillow (DejaVu Sans Bold) to a 1-bit image,
   one raster line per column, and sends: invalidate, `ESC @`, `ESC i a 01`,
   `ESC i z`, `ESC i M 40` (auto cut), `ESC i A 01`, `ESC i K 08` (no chain),
   `ESC i d 0E 00` (2 mm feed), `M 00` (no compression), `G 10 00` + 16 bytes per
   line, `1A`. Checks status first and refuses to print on any error. Then waits
   for the unsolicited "printing completed" reply. `--dry-run PREFIX` writes a
-  PNG preview and the raw job. `--flip` reverses pin order.
-- `pt_status.py`: stdlib-only. Finds `/dev/usb/lpN` for `04f9:2062` through
+  PNG preview and the raw job. `--flip` reverses pin order. Not needed: the
+  default (image row 0 at pin 0) prints readable text, confirmed by eye.
+  Several words are joined with spaces. If the DejaVu font is missing it falls
+  back to Pillow's bundled font.
+- `src/pt_p750w/status.py` (`pt-status`): stdlib-only. Finds `/dev/usb/lpN` for `04f9:2062` through
   sysfs, sends invalidate + `ESC @` + `ESC i S`, decodes the 32-byte status
   reply. Run with `just status`.
 - `udev/99-pt-p750w.rules`: gives group `plugdev` access to the printer (USB and
@@ -78,7 +88,7 @@ Drive a Brother PT-P750W label printer from Linux.
 | 24 | Tape colour | `0x01` white |
 | 25 | Text colour | `0x08` black |
 
-All codes in `pt_status.py` are checked against the spec (section 4,
+All codes in `status.py` are checked against the spec (section 4,
 status tables). Pin map from the spec (section 2.3.5), as
 (left margin, print area) pins on the 128-pin head: 3.5 mm (52, 24),
 6 mm (48, 32), 9 mm (39, 50), 12 mm (29, 70), 18 mm (8, 112), 24 mm (0, 128).
@@ -97,8 +107,8 @@ verified on hardware: model code `0x68`, 24 mm laminated tape, black on white.
 Known-good raw reply:
 `80 20 42 30 68 30 04 00 00 00 18 01 00 00 00 00 00 00 00 00 00 00 00 00 01 08 00 00 00 00 00 00`.
 `just print "TEST"` printed on hardware (2026-11-10): 386 raster lines,
-printer replied phase change, phase change, printing completed. Pin orientation
-(whether `--flip` is needed) is not yet confirmed by eye.
+printer replied phase change, phase change, printing completed. The label
+reads correctly, not mirrored, with the default pin order.
 
 The printer queues unsolicited replies (phase change etc.). Both scripts call
 `drain()` before sending, or the first read returns a stale message. An earlier
