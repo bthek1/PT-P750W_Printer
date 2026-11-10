@@ -24,7 +24,7 @@ def api(tmp_path, monkeypatch):
     (tmp_path / "index.html").write_text("<h1>ui</h1>")
     httpd = server.make_server("127.0.0.1", 0, tmp_path)
     # A short poll interval keeps shutdown() fast; the default 0.5 s adds up per test.
-    threading.Thread(target=httpd.serve_forever, args=(0.01,), daemon=True).start()
+    threading.Thread(target=httpd.serve_forever, args=(0.001,), daemon=True).start()
     base = f"http://127.0.0.1:{httpd.server_address[1]}"
     yield base, printed
     httpd.shutdown()

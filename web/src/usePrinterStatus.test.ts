@@ -1,4 +1,4 @@
-import { act, renderHook } from '@testing-library/react'
+import { act, cleanup, renderHook } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { StatusResponse } from './api'
 import { POLL_MS, usePrinterStatus } from './usePrinterStatus'
@@ -25,6 +25,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  cleanup()
   setHidden(false)
   vi.useRealTimers()
   vi.unstubAllGlobals()
@@ -79,6 +80,16 @@ describe('usePrinterStatus', () => {
     act(() => result.current[1]())
     await advance(0)
     expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not poll again when unmounted mid-request', async () => {
+    let resolve: (r: Response) => void = () => {}
+    fetchMock.mockImplementationOnce(() => new Promise<Response>((r) => (resolve = r)))
+    const { unmount } = renderHook(() => usePrinterStatus())
+    unmount()
+    resolve(new Response(JSON.stringify(ONLINE)))
+    await advance(POLL_MS * 3)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
   it('stops polling after unmount', async () => {

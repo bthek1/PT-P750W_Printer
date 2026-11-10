@@ -22,13 +22,15 @@ export function usePrinterStatus(): [Connection, () => void] {
       // Each poll sends a command to the printer. Skip it while the tab is
       // hidden so a forgotten tab does not keep the device busy.
       if (!document.hidden) {
+        let next: Connection
         try {
-          const data = await fetchStatus(controller.signal)
-          setConnection({ state: 'online', data })
+          next = { state: 'online', data: await fetchStatus(controller.signal) }
         } catch (error) {
-          if (controller.signal.aborted) return
-          setConnection({ state: 'offline', error: String(error) })
+          next = { state: 'offline', error: String(error) }
         }
+        // Unmounted or restarted by refresh() while the request was in flight.
+        if (controller.signal.aborted) return
+        setConnection(next)
       }
       timer = window.setTimeout(poll, POLL_MS)
     }

@@ -88,4 +88,70 @@ describe('App', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Print' }))
     await waitFor(() => expect(screen.getByText('Printer not ready: cover open')).toBeInTheDocument())
   })
+
+  it('previews the label at the loaded tape width', async () => {
+    mockServer({ ...READY, status: { ...READY.status!, tape_mm: 12 } })
+    render(<App />)
+    await screen.findByText('Ready')
+    expect(screen.getByText('Preview appears here')).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText(/Label text/), { target: { value: 'Hi\nthere' } })
+    const preview = await screen.findByAltText('Label preview')
+    const url = new URL(preview.getAttribute('src')!, 'http://x')
+    expect(url.searchParams.get('text')).toBe('Hi\nthere')
+    expect(url.searchParams.get('tape')).toBe('12')
+  })
+
+  it('prints with Ctrl+Enter', async () => {
+    const fetchMock = mockServer(READY)
+    render(<App />)
+    await screen.findByText('Ready')
+    const editor = screen.getByLabelText(/Label text/)
+    fireEvent.change(editor, { target: { value: 'Hi' } })
+    fireEvent.keyDown(editor, { key: 'Enter', ctrlKey: true })
+    expect(await screen.findByText(/Printed/)).toBeInTheDocument()
+    expect(fetchMock.mock.calls.filter(([url]) => url === '/api/print')).toHaveLength(1)
+  })
+
+  it('sends cut: false when the checkbox is cleared', async () => {
+    const fetchMock = mockServer(READY)
+    render(<App />)
+    await screen.findByText('Ready')
+    fireEvent.change(screen.getByLabelText(/Label text/), { target: { value: 'Hi' } })
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Cut after printing' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Print' }))
+    await screen.findByText(/Printed/)
+    const call = fetchMock.mock.calls.find(([url]) => url === '/api/print') as unknown as [string, RequestInit]
+    expect(JSON.parse(call[1].body as string)).toEqual({ text: 'Hi', cut: false })
+  })
+
+  it('disables Print for blank text', async () => {
+    mockServer(READY)
+    render(<App />)
+    await screen.findByText('Ready')
+    fireEvent.change(screen.getByLabelText(/Label text/), { target: { value: '  \n ' } })
+    expect(screen.getByRole('button', { name: 'Print' })).toBeDisabled()
+  })
+
+  it('disables Print while another job is printing', async () => {
+    mockServer({ ...READY, busy: true })
+    render(<App />)
+    expect(await screen.findByRole('status')).toHaveTextContent('Printing')
+    fireEvent.change(screen.getByLabelText(/Label text/), { target: { value: 'Hi' } })
+    expect(screen.getByRole('button', { name: 'Print' })).toBeDisabled()
+  })
+
+  it('blocks a second print while the first is running', async () => {
+    let finish: (r: Response) => void = () => {}
+    const fetchMock = mockServer(READY, new Promise<Response>((r) => (finish = r)))
+    render(<App />)
+    await screen.findByText('Ready')
+    fireEvent.change(screen.getByLabelText(/Label text/), { target: { value: 'Hi' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Print' }))
+    const button = await screen.findByRole('button', { name: 'Printing...' })
+    expect(button).toBeDisabled()
+    fireEvent.keyDown(screen.getByLabelText(/Label text/), { key: 'Enter', ctrlKey: true })
+    finish(new Response(JSON.stringify({ ok: true, raster_lines: 1, length_mm: 0.1 })))
+    await screen.findByText(/Printed/)
+    expect(fetchMock.mock.calls.filter(([url]) => url === '/api/print')).toHaveLength(1)
+  })
 })

@@ -46,8 +46,16 @@ Drive a Brother PT-P750W label printer from Linux.
   `[project.scripts]`). Runtime dependency: Pillow. Dev dependency: pytest.
 - Library functions raise `PrinterError` (in `status.py`). Only the CLI
   `main()` functions turn it into `sys.exit`, so the server can reuse them.
-- Tests: `just test`. Hermetic (no printer), under 0.1 s. They check the job
-  against the spec's example bytes and the known-good status reply.
+- Tests: `just test`. Hermetic (no printer): 66 tests in about 0.2 s. They
+  check the job against the spec's example bytes and the known-good status
+  reply. `tests/conftest.py` has `fake_printer`: a socketpair that plays the
+  printer, so the real `read_reply`/`drain`/`send` code runs without USB. Its
+  script matches on the full request, not a suffix like `1A`, because raster
+  data can contain any byte. `find_device` is tested against a fake sysfs
+  tree via `status.DEV_GLOB` and `status.USBMISC`.
+- Coverage: `just coverage` runs pytest-cov and Vitest v8 coverage. Both fail
+  under 90%. As of 2026-11-10: Python 99% lines, web 99% statements and 92%
+  branches. pytest-cov needs `-p pytest_cov` because plugin autoload is off.
   `pyproject.toml` sets `addopts = ["--disable-plugin-autoload"]` (pytest 8.4+):
   the user's ROS 2 `PYTHONPATH` injects `launch_testing` plugins that fail to
   import. Keep it there, not in an env var, so VS Code test discovery works too.
@@ -83,7 +91,10 @@ Drive a Brother PT-P750W label printer from Linux.
   tailwind-merge). Imports use the `@/` alias for `src/`. Dark mode follows the
   OS: `main.tsx` toggles the `.dark` class that shadcn's variant expects. `usePrinterStatus` polls every 2 s, pauses while the tab is hidden,
   and keeps retrying when the server is down. Vite proxies `/api` to
-  `pt-server` in dev. Tests mock `fetch`: `just web-test`. Build: `just
+  `pt-server` in dev. Tests mock `fetch`: `just web-test`. Vitest runs
+  without `globals`, so Testing Library does not unmount between tests: each
+  test file must call `cleanup()` in `afterEach`, or old components keep
+  polling the next test's mock. Build: `just
   web-build`.
 - `render()` accepts newlines (several centred lines). The CLI joins its
   arguments with spaces, so only the API produces multi-line labels.

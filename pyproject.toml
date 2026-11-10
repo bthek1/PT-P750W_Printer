@@ -20,6 +20,7 @@ build-backend = "hatchling.build"
 [dependency-groups]
 dev = [
     "pytest>=9.2.0",
+    "pytest-cov>=7.1.0",
 ]
 
 [tool.pytest.ini_options]
@@ -27,3 +28,11 @@ dev = [
 # import. Disabling autoload here also covers VS Code test discovery.
 addopts = ["--disable-plugin-autoload"]
 testpaths = ["tests"]
+
+[tool.coverage.run]
+source = ["pt_p750w"]
+
+[tool.coverage.report]
+show_missing = true
+fail_under = 90
+exclude_also = ['if __name__ == "__main__":']

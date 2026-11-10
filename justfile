@@ -14,6 +14,11 @@ test:
 web-test:
     cd web && flock -o /tmp/agent-tests.lock npm test
 
+# Coverage for Python and web tests; each fails under 90%
+coverage:
+    flock -o /tmp/agent-tests.lock uv run pytest -q -p pytest_cov --cov
+    cd web && flock -o /tmp/agent-tests.lock npm run coverage
+
 # Build the web UI, then serve it and the API on http://127.0.0.1:8750
 serve *flags: web-build
     uv run pt-server {{flags}}
