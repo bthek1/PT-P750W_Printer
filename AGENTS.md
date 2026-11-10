@@ -49,7 +49,28 @@ Drive a Brother PT-P750W label printer from Linux.
 - `udev/99-pt-p750w.rules`: gives group `plugdev` access to the printer (USB and
   usblp nodes). The user is in `plugdev`, not `lp`. Install with
   `just install-udev` (needs the user's sudo password; agents cannot run it).
+- `just install-udev` must trigger both the USB device (`--attr-match=idVendor=04f9`)
+  and the `usbmisc` subsystem. The `lp` node has no `idVendor` attribute, so
+  the first trigger alone leaves it as `root:lp`. Debug with
+  `udevadm test /sys/class/usbmisc/lpN 2>&1 | grep 99-pt`.
 - CUPS is active on the dev VM and may briefly re-bind usblp on hotplug.
+
+### Status reply (32 bytes, verified offsets)
+
+| Byte | Meaning | Seen |
+|---|---|---|
+| 0 | Print head mark, always `0x80` | `0x80` |
+| 4 | Model code (`0x68` = PT-P750W) | `0x68` |
+| 8, 9 | Error bit fields 1 and 2 | `0x00 0x00` |
+| 10 | Tape width in mm | `0x18` (24) |
+| 11 | Media type | `0x01` laminated |
+| 18 | Status type | `0x00` reply |
+| 24 | Tape colour | `0x01` white |
+| 25 | Text colour | `0x08` black |
+
+Error-bit, media-type and colour tables in `pt_status.py` come from memory of
+Brother's raster command reference. Only the values above are confirmed on
+hardware. Treat other codes as unverified.
 
 ## Docs
 
@@ -64,3 +85,8 @@ verified on hardware: model code `0x68`, 24 mm laminated tape, black on white.
 Known-good raw reply:
 `80 20 42 30 68 30 04 00 00 00 18 01 00 00 00 00 00 00 00 00 00 00 00 00 01 08 00 00 00 00 00 00`.
 No printing code yet.
+
+Next: print a test label on the 24 mm tape. Render text to a bitmap the height
+of the 128-pin head, send it as raster lines with auto cut on. Get the
+printable pin range for 24 mm from `PRTINFO.INI` (Editor Lite drive) or the
+raster command reference. Do not guess it.

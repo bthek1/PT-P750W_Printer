@@ -7,6 +7,7 @@ import glob
 import os
 import select
 import sys
+import time
 from pathlib import Path
 
 VENDOR, PRODUCT = "04f9", "2062"
@@ -51,23 +52,38 @@ def find_device() -> str:
     sys.exit(f"No PT-P750W ({VENDOR}:{PRODUCT}) found. Is Editor Lite off and the USB port passed through?")
 
 
-def read_status(node: str, timeout: float = 3.0) -> bytes:
+def open_printer(node: str) -> int:
     try:
-        fd = os.open(node, os.O_RDWR)
+        return os.open(node, os.O_RDWR)
     except PermissionError:
         sys.exit(f"No access to {node}. Run `just install-udev` once.")
+
+
+def read_reply(fd: int, timeout: float = 3.0) -> bytes:
+    """Read one 32-byte status reply, or fewer bytes if the timeout expires."""
+    deadline = time.monotonic() + timeout
+    data = b""
+    while len(data) < 32:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        ready, _, _ = select.select([fd], [], [], remaining)
+        if not ready:
+            break
+        chunk = os.read(fd, 32 - len(data))
+        if not chunk:
+            # usblp can report readable with nothing queued; avoid a hot loop.
+            time.sleep(0.05)
+            continue
+        data += chunk
+    return data
+
+
+def read_status(node: str, timeout: float = 3.0) -> bytes:
+    fd = open_printer(node)
     try:
         os.write(fd, INVALIDATE + INITIALIZE + STATUS_REQUEST)
-        data = b""
-        while len(data) < 32:
-            ready, _, _ = select.select([fd], [], [], timeout)
-            if not ready:
-                break
-            chunk = os.read(fd, 32 - len(data))
-            if not chunk:
-                continue
-            data += chunk
-        return data
+        return read_reply(fd, timeout)
     finally:
         os.close(fd)
 

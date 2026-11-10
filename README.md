@@ -67,6 +67,24 @@ just install-udev
 just status   # tape width, media type, colours, errors
 ```
 
+## Files
+
+| Path | Purpose |
+|---|---|
+| `pt_status.py` | Reads and decodes live printer status over USB |
+| `udev/99-pt-p750w.rules` | Lets the `plugdev` group use the printer |
+| `justfile` | `status` and `install-udev` recipes |
+| `AGENTS.md` | Notes and rules for AI agents |
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `No PT-P750W (04f9:2062) found` | Printer off, Editor Lite on, or port not forwarded | Switch it on, turn Editor Lite off, check `lsusb -d 04f9:` |
+| `No access to /dev/usb/lpN` | udev rule missing or not applied | `just install-udev`, or switch the printer off and on |
+| `lsusb` shows `04f9:2065` | Editor Lite mode | Hold the Editor Lite button until the LED goes off |
+
 ## Status
 
-USB forwarding and live status work. No printing code yet.
+USB forwarding and live status work (verified on 24 mm laminated tape).
+No printing code yet. Next: print a test label.
