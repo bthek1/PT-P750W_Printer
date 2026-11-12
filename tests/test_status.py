@@ -72,6 +72,7 @@ def sysfs(tmp_path, monkeypatch):
     (tmp_path / "dev").mkdir()
     monkeypatch.setattr(status, "DEV_GLOB", str(tmp_path / "dev" / "lp*"))
     monkeypatch.setattr(status, "USBMISC", tmp_path / "usbmisc")
+    monkeypatch.setattr(status, "USB_DEVICES", tmp_path / "devices")
     return tmp_path
 
 
@@ -86,6 +87,12 @@ def test_find_device_ignores_editor_lite_mode(sysfs):
     fake_usb_device(sysfs, "lp0", "04f9", "2065")
     with pytest.raises(PrinterError, match="Editor Lite"):
         status.find_device()
+
+
+def test_find_device_without_usb_asks_the_network(sysfs, monkeypatch):
+    fake_usb_device(sysfs, "lp0", "04f9", "2042")  # only the laser on USB
+    monkeypatch.setattr(status.network, "find_printer", lambda rescan_after: "10.0.0.5")
+    assert status.find_device() == "tcp://10.0.0.5:9100"
 
 
 def test_open_printer_reports_missing_permission(tmp_path):

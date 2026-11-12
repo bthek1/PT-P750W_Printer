@@ -1,4 +1,4 @@
-"""Print a text label on a Brother PT-P750W over /dev/usb/lpN.
+"""Print a text label on a Brother PT-P750W over USB (/dev/usb/lpN) or the network.
 
 Protocol: Brother "Raster Command Reference" for PT-E550W/P750W/P710BT,
 sections 2.1 (job layout), 2.3.5 (pin table) and 4 (command details).
@@ -14,6 +14,7 @@ from typing import NamedTuple
 
 from PIL import Image, ImageDraw, ImageFont
 
+from pt_p750w import network
 from pt_p750w.status import (
     ERRORS_1,
     ERRORS_2,
@@ -397,6 +398,14 @@ def check_ready(status: bytes) -> int:
 
 
 def send(node: str, job: bytes, pages: int = 1, timeout: float = 15) -> None:
+    if address := network.parse_node(node):
+        # The raw port is one-way (spec 5.6): no completion replies to wait for.
+        try:
+            network.send_job(*address, job, timeout)
+        except OSError as e:
+            raise PrinterError(f"Cannot send to {address[0]}:{address[1]}: {e}")
+        print(f"sent {pages} page{'s' if pages > 1 else ''} to {address[0]}")
+        return
     fd = open_printer(node)
     try:
         drain(fd)

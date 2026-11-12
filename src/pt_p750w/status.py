@@ -1,4 +1,4 @@
-"""Read live status from a Brother PT-P750W over /dev/usb/lpN.
+"""Read live status from a Brother PT-P750W over USB (/dev/usb/lpN) or the network.
 
 Protocol: Brother "Raster Command Reference" for PT-E550W/P750W/P710BT.
 """
@@ -9,9 +9,14 @@ import sys
 import time
 from pathlib import Path
 
+from pt_p750w import network
+
 VENDOR, PRODUCT = "04f9", "2062"
+EDITOR_LITE_PRODUCT = "2065"
 DEV_GLOB = "/dev/usb/lp*"
 USBMISC = Path("/sys/class/usbmisc")
+USB_DEVICES = Path("/sys/bus/usb/devices")
+DEVICE_ENV = "PT_P750W_DEVICE"
 DRAIN_TIMEOUT = 0.2
 
 INVALIDATE = b"\x00" * 100
@@ -57,16 +62,38 @@ class PrinterError(Exception):
     """The printer is missing, unreachable or not ready."""
 
 
-def find_device() -> str:
+def usb_ids(device: Path) -> tuple[str, str] | None:
+    try:
+        return (device / "idVendor").read_text().strip(), (device / "idProduct").read_text().strip()
+    except FileNotFoundError:
+        return None
+
+
+def find_usb() -> str | None:
+    """The printer's /dev/usb/lpN node, or None. Raises PrinterError if it is in Editor Lite mode."""
     for node in sorted(glob.glob(DEV_GLOB)):
-        usb_dev = (USBMISC / Path(node).name / "device").resolve().parent
-        try:
-            ids = ((usb_dev / "idVendor").read_text().strip(), (usb_dev / "idProduct").read_text().strip())
-        except FileNotFoundError:
-            continue
-        if ids == (VENDOR, PRODUCT):
+        if usb_ids((USBMISC / Path(node).name / "device").resolve().parent) == (VENDOR, PRODUCT):
             return node
-    raise PrinterError(f"No PT-P750W ({VENDOR}:{PRODUCT}) found. Is Editor Lite off and the USB port passed through?")
+    if any(usb_ids(d) == (VENDOR, EDITOR_LITE_PRODUCT) for d in USB_DEVICES.glob("*")):
+        raise PrinterError("The PT-P750W is in Editor Lite mode (USB storage). "
+                           "Hold the Editor Lite button until its LED goes off.")
+    return None
+
+
+def find_device(rescan_after: float = 0.0) -> str:
+    """Where the printer is: $PT_P750W_DEVICE, else USB, else the network (last known address, then a scan).
+
+    Returns a device path or a tcp://host:port node.
+    """
+    if override := os.environ.get(DEVICE_ENV):
+        return network.normalise(override)
+    if node := find_usb():
+        return node
+    if host := network.find_printer(rescan_after):
+        return network.node_for(host)
+    raise PrinterError(f"No PT-P750W found on USB ({VENDOR}:{PRODUCT}) or the network. Switch it on, "
+                       "plug in USB, or join it to this network (Wi-Fi or its DIRECT-*_PT-P750W access point). "
+                       f"Or set {DEVICE_ENV}=<path or host>.")
 
 
 def open_printer(node: str) -> int:
@@ -105,6 +132,13 @@ def drain(fd: int) -> None:
 
 
 def read_status(node: str, timeout: float = 3.0) -> bytes:
+    if address := network.parse_node(node):
+        host = address[0]
+        reply = network.read_status(host, min(timeout, 2.0))
+        if reply is None:
+            raise PrinterError(f"No status from {host} over SNMP (UDP {network.SNMP_PORT}). "
+                               "Is it a PT-P750W, on and on this network?")
+        return reply
     fd = open_printer(node)
     try:
         drain(fd)
@@ -142,7 +176,7 @@ def decode(status: bytes) -> dict:
 
 def main() -> None:
     try:
-        node = sys.argv[1] if len(sys.argv) > 1 else find_device()
+        node = network.normalise(sys.argv[1]) if len(sys.argv) > 1 else find_device()
         info = decode(read_status(node))
     except PrinterError as e:
         sys.exit(str(e))

@@ -39,10 +39,11 @@ from pt_p750w.status import PrinterError, decode, find_device, read_status
 MAX_TEXT = 1000  # room for a set of labels, e.g. 99 short ones
 MAX_BODY = 8192
 DEFAULT_TAPE_MM = 24
+RESCAN_AFTER = 10  # seconds between network scans while no printer is found
 
 
 class Printer:
-    """Serialises access to the one USB device and caches the last status."""
+    """Serialises access to the printer (USB or network) and caches the last status."""
 
     def __init__(self) -> None:
         self.lock = threading.Lock()
@@ -63,7 +64,7 @@ class Printer:
     def _read(self) -> dict:
         checked_at = datetime.now(UTC).isoformat()
         try:
-            node = find_device()
+            node = find_device(rescan_after=RESCAN_AFTER)
             info = decode(read_status(node))
         except PrinterError as e:
             return {"connected": False, "device": None, "error": str(e), "status": None, "checked_at": checked_at}

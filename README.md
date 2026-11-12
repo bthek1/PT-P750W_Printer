@@ -1,8 +1,31 @@
 # PT-P750W Printer
 
-Print labels on a Brother PT-P750W from a Linux VM.
+Print labels on a Brother PT-P750W from Linux, over USB or the network.
 
-## Setup
+## Finding the printer
+
+`pt-print`, `pt-status` and `pt-server` look for the printer on their own, in
+this order:
+
+1. `PT_P750W_DEVICE`, if set: a device path (`/dev/usb/lp0`) or a host
+   (`192.168.1.50`, `printer.lan:9100`). `pt-status <path or host>` also works.
+2. USB: any `/dev/usb/lpN` with ID `04f9:2062`, on any machine.
+3. Network: the last address found (kept in `~/.cache/pt-p750w/host`), then an
+   SNMP broadcast on every local network. Only a device that names itself
+   `PT-P750W` is used; nothing is sent to other printers. The web server scans
+   at most every 10 s while no printer is found.
+
+On a laptop, either plug the printer in by USB (then run `just install-udev`
+once on that machine), or put the printer on the same network: join it to
+your Wi-Fi, or connect the laptop to the printer's own `DIRECT-*_PT-P750W`
+access point.
+
+Over the network, labels go to TCP 9100 and status comes from SNMP (UDP 161).
+The raw port is one-way, so `pt-print` cannot wait for "printing completed"
+there; it reports the job as sent. The network path is not yet tested on the
+PT-P750W itself (see Status).
+
+## Setup (Proxmox VM)
 
 The printer connects by USB to the Proxmox host. The host forwards the USB port
 to the VM.
@@ -214,7 +237,8 @@ Do not run a CUPS job and `pt-print` at the same time.
 
 | Path | Purpose |
 |---|---|
-| `src/pt_p750w/status.py` | `pt-status`: reads and decodes live printer status over USB |
+| `src/pt_p750w/status.py` | `pt-status`: finds the printer, reads and decodes live status |
+| `src/pt_p750w/network.py` | Network discovery (SNMP broadcast), SNMP status, raw TCP 9100 printing |
 | `src/pt_p750w/printing.py` | `pt-print`: renders text and prints it as a label |
 | `src/pt_p750w/server.py` | `pt-server`: HTTP API and host for the web UI |
 | `web/` | React + TypeScript + Vite + Tailwind + shadcn/ui web UI, Vitest tests |
@@ -228,9 +252,10 @@ Do not run a CUPS job and `pt-print` at the same time.
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `No PT-P750W (04f9:2062) found` | Printer off, Editor Lite on, or port not forwarded | Switch it on, turn Editor Lite off, check `lsusb -d 04f9:` |
+| `No PT-P750W found on USB ... or the network` | Printer off, not plugged in, not on this network, or port not forwarded | Switch it on, check `lsusb -d 04f9:`, or join it to this network; or set `PT_P750W_DEVICE` |
+| `No status from <host> over SNMP` | Host is not a PT-P750W, or SNMP is off on the printer | Check the address; enable SNMP in the printer's network settings |
 | `No access to /dev/usb/lpN` | udev rule missing or not applied | `just install-udev`, or switch the printer off and on |
-| `lsusb` shows `04f9:2065` | Editor Lite mode | Hold the Editor Lite button until the LED goes off |
+| `in Editor Lite mode`, or `lsusb` shows `04f9:2065` | Editor Lite mode | Hold the Editor Lite button until the LED goes off |
 | `Printer not ready: replace media` | Cassette not seated, or a latched error | Reseat the tape cassette, close the cover, switch the printer off and on |
 
 ## Status

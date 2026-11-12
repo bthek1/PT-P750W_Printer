@@ -5,6 +5,7 @@ description = "Print text labels on a Brother PT-P750W over USB"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "phisaver-client>=2.1.5",
     "pillow>=13.0.0",
 ]
 

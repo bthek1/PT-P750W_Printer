@@ -3,7 +3,7 @@ import threading
 
 import pytest
 
-from pt_p750w import printing, status
+from pt_p750w import network, printing, status
 
 # Status reply captured from the real printer: 24 mm laminated, black on white.
 GOOD_STATUS = bytes.fromhex(
@@ -67,3 +67,13 @@ def fake_printer(monkeypatch):
     monkeypatch.setattr(printing, "open_printer", printer.open)
     monkeypatch.setattr(status, "DRAIN_TIMEOUT", 0.01)
     return printer
+
+
+@pytest.fixture(autouse=True)
+def offline(monkeypatch, tmp_path):
+    """Keep tests off the real network, the user's cache and any $PT_P750W_DEVICE."""
+    monkeypatch.delenv(status.DEVICE_ENV, raising=False)
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    monkeypatch.setattr(network, "_last_scan", float("-inf"))
+    monkeypatch.setattr(network, "broadcast_addresses", lambda: pytest.fail("broadcast on the real network"))
+    monkeypatch.setattr(status, "USB_DEVICES", tmp_path / "no-usb")

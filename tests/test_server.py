@@ -19,7 +19,7 @@ from pt_p750w.status import PrinterError
 def api(tmp_path, monkeypatch):
     """Start the server on a free port with the USB device stubbed out."""
     printed = []
-    monkeypatch.setattr(server, "find_device", lambda: "/dev/usb/lp9")
+    monkeypatch.setattr(server, "find_device", lambda **kw: "/dev/usb/lp9")
     monkeypatch.setattr(server, "read_status", lambda node: GOOD_STATUS)
     monkeypatch.setattr(server, "print_text", lambda *job: printed.append(job) or 386)
     (tmp_path / "index.html").write_text("<h1>ui</h1>")
@@ -56,7 +56,7 @@ def test_status_decodes_printer_reply(api):
 def test_status_reports_missing_printer(api, monkeypatch):
     base, _ = api
 
-    def missing():
+    def missing(**kw):
         raise PrinterError("No PT-P750W found")
 
     monkeypatch.setattr(server, "find_device", missing)
@@ -182,7 +182,7 @@ def test_serves_web_ui(api):
 def test_status_during_print_uses_cache(monkeypatch):
     # Reading status mid-job would steal the printer's completion reply.
     printer = server.Printer()
-    monkeypatch.setattr(server, "find_device", lambda: pytest.fail("touched the device during a print"))
+    monkeypatch.setattr(server, "find_device", lambda **kw: pytest.fail("touched the device during a print"))
     with printer.lock:
         assert printer.status()["busy"] is True
 
@@ -306,7 +306,7 @@ def test_print_passes_style_to_the_job(monkeypatch):
     # Unlike the api fixture, this runs the real print_text and make_job.
     jobs = []
     monkeypatch.setattr(server, "print_text", server.print_text)
-    monkeypatch.setattr("pt_p750w.printing.find_device", lambda: "/dev/usb/lp9")
+    monkeypatch.setattr("pt_p750w.printing.find_device", lambda **kw: "/dev/usb/lp9")
     monkeypatch.setattr("pt_p750w.printing.read_status", lambda node: GOOD_STATUS)
     monkeypatch.setattr("pt_p750w.printing.send", lambda node, job, pages: jobs.append(job))
     printer = server.Printer()

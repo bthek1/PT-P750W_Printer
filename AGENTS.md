@@ -35,21 +35,35 @@ Drive a Brother PT-P750W label printer from Linux.
 
 ## How to find the printer
 
-1. USB: `lsusb -d 04f9:` and `ls /dev/usb/lp*`.
-2. LAN: `nmap -n -Pn -p 9100 --open <subnet>`, then check each hit with
-   `ipptool` or SNMP. Only the PT-P750W model counts.
+The code does it: `status.find_device(rescan_after)` tries `$PT_P750W_DEVICE`
+(path or host[:port]), then USB sysfs (`find_usb`, which also raises on
+Editor Lite `2065` via `USB_DEVICES`), then `network.find_printer`: the cached
+host (`$XDG_CACHE_HOME/pt-p750w/host`) if it still identifies by SNMP, else an
+SNMP v1 broadcast to each interface's broadcast address. A device is the
+printer only if one of the identity OIDs (Brother 1284 ID, hrDeviceDescr,
+sysDescr) contains `PT-P750W`. Network nodes are strings `tcp://host:9100`;
+`network.parse_node` tells them apart from device paths.
+
+Do not probe unknown port-9100 hosts with `ESC i S` or other raster bytes: the
+LAN's HL-L2305 laser listens there and may print junk. Identify by SNMP first
+(read-only GETs). The SNMP code is checked against the laser (2026-11-11): its
+1284 ID reads `MDL:HL-L2305 series`, sysDescr `Brother NC-8300w ...`.
+
+By hand: `lsusb -d 04f9:`, `ls /dev/usb/lp*`; on the LAN,
+`nmap -n -Pn -p 9100 --open <subnet>` and then SNMP, not raw bytes.
 
 ## Code
 
 - Python env: `uv` package, src layout (`src/pt_p750w/`), hatchling build.
   Console scripts `pt-print`, `pt-status` and `pt-server` (see
-  `[project.scripts]`). Runtime dependency: Pillow. Dev dependencies: pytest, pytest-cov.
+  `[project.scripts]`). Runtime dependencies: Pillow, `phisaver-client` (PhiSaver
+  API client from PyPI, not yet used by the code). Dev dependencies: pytest, pytest-cov.
 - Library functions raise `PrinterError` (in `status.py`). Only the CLI
   `main()` functions turn it into `sys.exit`, so the server can reuse them.
 - Test recipes (`test`, `web-test`, `coverage`) take `/tmp/agent-tests.lock`
   themselves. Call them directly. Wrapping `just` in another `flock` on the
   same file deadlocks: the outer lock blocks the inner one forever.
-- Tests: `just test`. Hermetic (no printer): 177 tests in about 0.7 s. They
+- Tests: `just test`. Hermetic (no printer): 201 tests in about 1.5 s. They
   check the job against the spec's example bytes and the known-good status
   reply. `tests/conftest.py` has `fake_printer`: a socketpair that plays the
   printer, so the real `read_reply`/`drain`/`send` code runs without USB. Its
@@ -57,7 +71,7 @@ Drive a Brother PT-P750W label printer from Linux.
   data can contain any byte. `find_device` is tested against a fake sysfs
   tree via `status.DEV_GLOB` and `status.USBMISC`.
 - Coverage: `just coverage` runs pytest-cov and Vitest v8 coverage. Both fail
-  under 90%. As of 2026-11-11: Python 100% (177 tests), web 100% statements,
+  under 90%. As of 2026-11-11: Python 100% (201 tests), web 100% statements,
   lines and branches (72 tests). pytest-cov needs
   `-p pytest_cov` because plugin autoload is off.
   `pyproject.toml` sets `addopts = ["--disable-plugin-autoload"]` (pytest 8.4+):
@@ -89,9 +103,22 @@ Drive a Brother PT-P750W label printer from Linux.
   default (image row 0 at pin 0) prints readable text, confirmed by eye.
   Several words are joined with spaces. If the DejaVu font is missing it falls
   back to Pillow's bundled font.
-- `src/pt_p750w/status.py` (`pt-status`): stdlib-only. Finds `/dev/usb/lpN` for `04f9:2062` through
-  sysfs, sends invalidate + `ESC @` + `ESC i S`, decodes the 32-byte status
-  reply. Run with `just status`.
+- `src/pt_p750w/status.py` (`pt-status`): stdlib-only. Finds the printer (see
+  How to find the printer). Over USB it sends invalidate + `ESC @` + `ESC i S`
+  and decodes the 32-byte status reply. Run with `just status`.
+- `src/pt_p750w/network.py`: stdlib-only, imports nothing from the package
+  (status.py imports it, so it returns None/raises OSError, not
+  PrinterError). Minimal SNMP v1 GET (BER by hand), one request per OID
+  because v1 fails the whole request on a missing OID. Unicast `snmp_get`
+  returns once every request is answered; broadcast listens for the whole
+  timeout. Spec 5.6: TCP 9100 is one-way, so network status is SNMP OID
+  `1.3.6.1.4.1.2435.3.3.9.1.6.1.0` (Brother private, expected to hold the
+  same 32-byte block as `ESC i S`; NOT in the spec and NOT yet confirmed on
+  a PT-P750W) and `printing.send` to a `tcp://` node writes the job and
+  returns without waiting for completion. Tests: `tests/test_network.py`
+  runs a fake SNMP agent on 127.0.0.1; the autouse `offline` fixture in
+  conftest blocks real broadcasts, unsets `$PT_P750W_DEVICE` and points the
+  cache at tmp.
 - `src/pt_p750w/server.py` (`pt-server`): stdlib `ThreadingHTTPServer` on
   `127.0.0.1:8750`. `/api/status`, `/api/preview`, `/api/fit` (the font size the
   renderer picks, for the "N pt (max)" auto option), `/api/print`, and static
@@ -259,3 +286,10 @@ pages, all `M 40`, `A 03`, `K 0C`) printed exactly as intended: 24 mm leader,
 half cut, 01a, half cut, 02a, half cut, 03a, full cut. No extra cuts or
 waste between labels. Mixed half and full cuts in one job (pages with
 different `ESC i A` values) are still untested.
+
+2026-11-11: network discovery and printing added for use off the VM (e.g. a
+laptop). On the laptop the printer was absent from USB and from the LAN (it
+was still on the Proxmox host by USB; its Wi-Fi was off or on another
+network), so the network path is only tested against fakes and the HL-L2305.
+To verify: join the printer to the LAN, run `pt-status` (checks discovery and
+the SNMP status OID), then `pt-print TEST`.
